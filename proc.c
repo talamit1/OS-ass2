@@ -224,6 +224,106 @@ exit(void)
   sched();
   panic("zombie exit");
 }
+/* ---------------task 1B ------------- */
+//register a new signal handler to the process handlers
+sighandler_t signal(int signum,sighandler_t handler){
+  acquire(&ptable.lock);\
+  sighandler_t oldHandler=proc->handlers[signum];
+  proc->handlers[signum]=handler;
+  release(&ptable.lock);
+  
+  return oldHandler;
+}
+/* ---------------task 1C ------------- */
+//this function responsible for the sgnal sending
+int sigsend(int pid,int signum){
+  struct proc *p;
+  acquire(&ptable.lock);
+  int found=0;
+  for(p=ptable.proc;p<&ptable.proc[NPROC]&& !found ;p++){
+    if(p->pid==pid){
+      found=1;
+      int num=1<<signum;
+      proc->pending|=num;
+      break;
+    }
+  }
+  release(&ptable.lock);
+  if(found==0)
+    return -1;
+
+  return 0;
+
+}
+
+
+
+/*----------default handker------------*/
+void defHandler(int signum){
+  cprintf("A signal %d was accepted by process %d/n",signum,proc->pid);
+
+}
+
+int sigreturn(void){
+  
+  memmove(proc->tf,proc->tf->esp,sizeof(trapframe));
+  proc->tf->esp+=sizeof(trapframe);
+
+
+}
+
+
+
+
+/*------------- task 1D ---------------*/
+//this function checks pending signals and handle them if necessery
+void checkPendingSignals(){
+  if(proc && (tf->cs&3) == DPL_USER && proc->isHandelingSignal == 0 && (proc->pending != 0) ){
+    
+  proc->isHandelingSignal=1;
+  int runner=proc->pending;
+  int signum;
+  for(signum=0;runner!=0;runner>>=1)
+    signum++;
+ 
+  proc->pending-=1<<signum;
+
+
+  sighandler_t handler = proc->handlers [signum];
+
+  if(handler==defHandler){
+    defHandler(signum);
+    return;}
+
+ proc->tf->esp-=sizeof(trapframe);
+ memmove(proc->tf->esp,proc->tf,sizeof(trapframe));
+ proc->tf->esp-=sizeof(sigreturn);
+ memmove(proc->tf->esp,sigreturn,sizeof(sigreturn))
+ proc->tf->esp-=sizeof(signum);
+ memmove(proc->tf->esp,&signum,sizeof(int));
+ 
+ proc->tf->eip=handler; 
+
+
+}
+
+
+    
+
+
+
+
+
+
+
+
+
+
+
+
+  }
+
+}
 
 // Wait for a child process to exit and return its pid.
 // Return -1 if this process has no children.

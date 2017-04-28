@@ -12,7 +12,34 @@ sys_fork(void)
 {
   return fork();
 }
+int sys_signal(void){
+  int signum;
+  char* handler;
+  if(argint(0,&signum)<0)
+    return -1;
+  if(argptr(1,&handler,4)<0)
+    return -1;
 
+  return (int) signal(signum,(sighandler_t)handler);
+
+}
+int sys_sigsend(void){
+  int pid;
+  int signum;
+  if(argint(0,&pid)<0)
+    return -1;
+  if(argint(1,&signum)<0)
+    return -1;
+
+  return sigsend(pid,signum);
+}
+
+/*int sys_sigreturn(void){
+
+
+  
+}
+*/
 int
 sys_exit(void)
 {
