@@ -26,6 +26,9 @@ alltraps:
   # Return falls through to trapret...
 .globl trapret
 trapret:
+
+  call checkPendingSignals
+
   popal
   popl %gs
   popl %fs

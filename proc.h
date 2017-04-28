@@ -67,7 +67,7 @@ struct proc {
   char name[16];               // Process name (debugging)
   uint pending;                //an 32 bit array  represents pending signals
   sighandler_t handlers[NUMSIG];        //array containts pointers to signal handlesrs functions
-  int  isHandelingSignal      // 1 if there is signal hendling on process an 0 otherwise
+  int  isHandelingSignal;      // 1 if there is signal hendling on process an 0 otherwise
 
 
 };

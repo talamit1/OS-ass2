@@ -117,7 +117,9 @@ int             wait(void);
 void            wakeup(void*);
 void            yield(void);
 int             sigsend(int pid,int signum);
-sighandler_t     signal(int signum,sighandler_t handler);
+sighandler_t    signal(int signum,sighandler_t handler);
+int             sigreturn(void);
+
 
 // swtch.S
 void            swtch(struct context**, struct context*);
