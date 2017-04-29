@@ -5,7 +5,7 @@ typedef void (*sighandler_t)(int);
 
 void
 test(int sigNum){
- printf(1,"\n=======================Signal Handler===================================\n Process id:  %d  Signal number: %x \n\n", getpid(),sigNum);
+ printf(1,"\n=======================Signal Handler===================================\n Process id:  %d  Signal number: %d \n\n", getpid(),sigNum);
 }
 
 
@@ -15,13 +15,12 @@ int j;
 printf(1,"------------------TestEx1----------------- \n");
 sighandler_t handler=(sighandler_t)test;
 for(int i=0;i<32;i++){
- //printf(1,"test  for1: i=%d\n",i);
+ printf(1,"test  for1: i=%d\n",i);
  signal(i,handler);
 }
-//printf(1,"talllllllllll");
+
 for(int j=0;j<32;j++){
  sigsend(getpid(),j);
- //printf(1,"rr");
 }
 for(j=0; j<15; j++)
 	  sleep(1);

@@ -20,18 +20,19 @@ extern void trapret(void);
 
 static void wakeup1(void *chan);
 
-void
-pinit(void)
-{
-  initlock(&ptable.lock, "ptable");
-}
 
 void initSigHandlers(struct proc * p) {
     int i;
     for (i = 0; i < NUMSIG; i++) {
-            p->handlers[i] = 0;
-            
+            p->handlers[i] = 0;     
     }
+}
+
+
+void
+pinit(void)
+{
+  initlock(&ptable.lock, "ptable");
 }
 
 //PAGEBREAK: 32
@@ -71,6 +72,7 @@ found:
   sp -= sizeof *p->tf;
   p->tf = (struct trapframe*)sp;
   p->pending=0;
+  p->alarmFlag =-1;
 
   // Set up new context to start executing at forkret,
   // which returns to trapret.
@@ -239,12 +241,15 @@ exit(void)
 }
 /* ---------------task 1B ------------- */
 //register a new signal handler to the process handlers
-sighandler_t signal(int signum,sighandler_t handler){
 
-  acquire(&ptable.lock);\
+
+sighandler_t signal(int signum,sighandler_t handler){
+  if(!proc || signum<0 || signum>=NUMSIG) 
+    return (sighandler_t)-1;
+  //acquire(&ptable.lock);
   sighandler_t oldHandler=proc->handlers[signum];
   proc->handlers[signum]=handler;
-  release(&ptable.lock);
+  //release(&ptable.lock);
   
   return oldHandler;
 }
@@ -259,7 +264,9 @@ int sigsend(int pid,int signum){
       found=1;
       int num=1<<signum;
       proc->pending|=num;
+      cprintf("pending in sigsend is: %d \n",p->pending);
       break;
+
     }
   }
 
@@ -271,87 +278,113 @@ int sigsend(int pid,int signum){
 
 }
 
-/*----------default handker------------*/
 void defHandler(int signum){
 
   cprintf("A signal %d was accepted by process %d/n",signum,proc->pid);
 
 }
 
-int sigreturn(void){
-  cprintf("----------------roy-------------------\n");  
-  memmove(&proc->tf,&proc->tf->esp,sizeof(struct trapframe));
-  proc->tf->esp+=sizeof(struct trapframe);
+int sigreturn(void){ 
+
+  cprintf("----------------roy-------------------\n"); 
+  proc->tf->esp+=8;
+  memmove(proc->tf,(uint*)proc->tf->esp,sizeof(struct trapframe));
+  
+  
   proc->isHandelingSignal=0;
-  return 0;
-
-
+ 
+ return 0;
 }
+
 
 void 
 sigretwrapper() 
-{  cprintf("yyyyyyy\n");
-     asm(
-    "movl $24, %eax\n"
-    "int $64" );
+{  
+	//cprintf("yyyyyyy\n");
+	__asm__ (
+          "movl $24, %eax\n" // sigreturn number
+          "int     $64");
 }
 
 /*------------- task 1D ---------------*/
 //this function checks pending signals and handle them if necessery
 void checkPendingSignals(){
-  if(proc && (proc->tf->cs&3) == DPL_USER && proc->isHandelingSignal == 0 && (proc->pending != 0) ){
+  if(proc && (proc->tf->cs&3) == DPL_USER && !proc->isHandelingSignal  && (proc->pending != 0) ){
           //cprintf("proc pending is: %d\n",proc->pending);
           proc->isHandelingSignal=1;
-          int runner=proc->pending;
-          int sigNum;
-          
+          uint runner=proc->pending;
+          uint sigNum;
+          if(proc->pending==1)
+            sigNum=0;
+          else{
           for(sigNum=-1;runner!=0;runner>>=1)
             sigNum++;
+        }
 
-          //cprintf("signum is: %d\n",signum);
           proc->pending-=1<<sigNum;
-          //cprintf("handler is: %d\n",proc->handlers[signum]);
+          //cprintf("signum is: %d\n",signum);
+          cprintf("proc pending is: %d\n",proc->pending);
+          /*proc->pending=6;
+          cprintf("proc pending is: %d\n",proc->pending);*/
+          
+          cprintf("proc pending is: %d\n",proc->pending);
+
 
 
           sighandler_t handler = proc->handlers[sigNum];
-          //cprintf("hendler is:  %d\n",handler);
+          
 
           if(handler==0){
-            //cprintf("inside cond \n");
+           
             defHandler(sigNum);
             return;}
+ 		     
+        
+         uint nesp = proc->tf->esp-(&checkPendingSignals-&sigretwrapper);
+        
+         int retAddress=nesp;
+         memmove((void*)nesp,sigretwrapper,&checkPendingSignals-&sigretwrapper);
+         
+         nesp=nesp-sizeof(struct trapframe);
+      
+         memmove((void*)nesp,proc->tf,sizeof(struct trapframe));
+                 
+         nesp=nesp-sizeof(int);
+         
+         memmove((void*)nesp,&sigNum,sizeof(int));
+         
+         nesp=nesp-sizeof(int);
+         
+         memmove((void*)nesp,&retAddress,sizeof(int));
 
-
-         // int sigretSize = &checkPendingSignals-&sigretwrapper;
-         // proc->tf->esp-=sizeof(struct trapframe);
-         // memmove((int*)proc->tf->esp,proc->tf,sizeof(struct trapframe));
-         // proc->tf->esp-=sigretSize;
-         // memmove((int*)proc->tf->esp,sigretwrapper,sigretSize);
-         // int retAddress=proc->tf->esp;
-         // proc->tf->esp-=4;
-         // *(int*)proc->tf->esp=(int)signum;
-         // proc->tf->esp-=4;
-         // *(int*)proc->tf->esp=(int)retAddress;
-         // proc->tf->eip= (uint)proc->handlers[signum];
-    uint sp;
-    sp=proc->tf->esp;
-    uint pseudo_sigret_size = (uint)&checkPendingSignals - (uint)&sigretwrapper;       // Get size of assembly code to push to stack
-    sp -= pseudo_sigret_size;                                                   // Allocate stack frame place for assembly system call of sigreturn
-    uint pseudo_sigret_return_addr = sp;                                        // Store return address after sigreturn
-    memmove((void *) sp, sigretwrapper, pseudo_sigret_size);
-    sp -= sizeof (struct trapframe);                                            // Allocate stack frame place for backup trapframe (CPU registers)
-    memmove((void *) sp, proc->tf, sizeof (struct trapframe));                  // Insert backup trapframe (CPU registers)
-    sp -= 4;                                                                    // Allocate stack frame place for signal number
-    *(uint*)sp = (uint)sigNum;                                                  // Insert signal number to stack frame
-    sp -= 4;                                                                    // Allocate stack frame place for a return address that points to an invocation of the system call 
-    *(uint*)sp = (uint)pseudo_sigret_return_addr;                               // Insert return address that points to an invocations of the system call sigreturn
-    //proc->tf->esp=sp;
-    proc->tf->eip=(uint) proc->handlers[sigNum];
-
-
-}
+         proc->tf->eip= (uint)proc->handlers[sigNum];
+         proc->tf->esp=nesp;
+	   }
   }
 
+void updateAlarams(){
+  struct proc *p;
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){        
+    if(p->alarmFlag >0){
+      p->alarmFlag--;
+      if(p->alarmFlag==0){
+        p->pending|=1<<13;
+      }
+    }
+
+  }
+
+}
+int alarm(int ti){
+  
+  if(ti==0){
+    proc->pending ^=1<<13;
+  }
+
+  proc-> alarmFlag= ti;
+
+  return 0;
+}
 
 
 // Wait for a child process to exit and return its pid.

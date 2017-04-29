@@ -17,7 +17,7 @@ int sys_signal(void){
   char* handler;
   if(argint(0,&signum)<0)
     return -1;
-  if(argptr(1,&handler,4)<0)
+  if(argptr(1,&handler,4) < 0 )
     return -1;
 
   return (int) signal(signum,(sighandler_t)handler);
@@ -32,6 +32,14 @@ int sys_sigsend(void){
     return -1;
 
   return sigsend(pid,signum);
+}
+
+int sys_alarm(void){
+  int ti;
+  if(argint(0,&ti)<0)
+    return -1;
+
+  return alarm(ti); 
 }
 
 int sys_sigreturn(void){

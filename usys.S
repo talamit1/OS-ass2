@@ -32,4 +32,6 @@ SYSCALL(uptime)
 SYSCALL(sigreturn)
 SYSCALL(signal)
 SYSCALL(sigsend)
+SYSCALL(alarm)
+
 

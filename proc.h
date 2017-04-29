@@ -48,8 +48,22 @@ struct context {
   uint eip;
 };
 
+
+struct thread {
+  int tid;
+  int state;
+  int lock;
+
+
+  //---for debugging
+  int name;
+};
+
+
+
 enum procstate { UNUSED, EMBRYO, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 #define NUMSIG 32
+#define MAX_UTHREADS=64
 // Per-process state
 struct proc {
   uint sz;                     // Size of process memory (bytes)
@@ -68,6 +82,8 @@ struct proc {
   uint pending;                //an 32 bit array  represents pending signals
   sighandler_t handlers[NUMSIG];        //array containts pointers to signal handlesrs functions
   int  isHandelingSignal;      // 1 if there is signal hendling on process an 0 otherwise
+  int alarmFlag;
+  struct thread ttable[MAX_UTHREADS];
 
 
 };
