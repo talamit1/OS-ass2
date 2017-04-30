@@ -119,7 +119,7 @@ void            yield(void);
 int             sigsend(int pid,int signum);
 sighandler_t    signal(int signum,sighandler_t handler);
 int             sigreturn(void);
-int 			alarm(int tic);
+int 			alarm(int);
 void 			updateAlarams(void);
 
 

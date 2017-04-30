@@ -264,7 +264,7 @@ int sigsend(int pid,int signum){
       found=1;
       int num=1<<signum;
       proc->pending|=num;
-      cprintf("pending in sigsend is: %d \n",p->pending);
+     // cprintf("pending in sigsend is: %d \n",p->pending);
       break;
 
     }
@@ -286,7 +286,7 @@ void defHandler(int signum){
 
 int sigreturn(void){ 
 
-  cprintf("----------------roy-------------------\n"); 
+   
   proc->tf->esp+=8;
   memmove(proc->tf,(uint*)proc->tf->esp,sizeof(struct trapframe));
   
@@ -299,7 +299,6 @@ int sigreturn(void){
 void 
 sigretwrapper() 
 {  
-	//cprintf("yyyyyyy\n");
 	__asm__ (
           "movl $24, %eax\n" // sigreturn number
           "int     $64");
@@ -309,7 +308,7 @@ sigretwrapper()
 //this function checks pending signals and handle them if necessery
 void checkPendingSignals(){
   if(proc && (proc->tf->cs&3) == DPL_USER && !proc->isHandelingSignal  && (proc->pending != 0) ){
-          //cprintf("proc pending is: %d\n",proc->pending);
+          
           proc->isHandelingSignal=1;
           uint runner=proc->pending;
           uint sigNum;
@@ -321,24 +320,16 @@ void checkPendingSignals(){
         }
 
           proc->pending-=1<<sigNum;
-          //cprintf("signum is: %d\n",signum);
-          cprintf("proc pending is: %d\n",proc->pending);
-          /*proc->pending=6;
-          cprintf("proc pending is: %d\n",proc->pending);*/
           
           cprintf("proc pending is: %d\n",proc->pending);
 
-
-
-          sighandler_t handler = proc->handlers[sigNum];
-          
+          sighandler_t handler = proc->handlers[sigNum];         
 
           if(handler==0){
            
             defHandler(sigNum);
             return;}
- 		     
-        
+ 		            
          uint nesp = proc->tf->esp-(&checkPendingSignals-&sigretwrapper);
         
          int retAddress=nesp;
@@ -384,7 +375,6 @@ int alarm(int ti){
 
   return 0;
 }
-
 
 // Wait for a child process to exit and return its pid.
 // Return -1 if this process has no children.
