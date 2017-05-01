@@ -6,6 +6,7 @@ enum threadState { T_UNUSED,T_SLEEPING, T_RUNNABLE, T_RUNNING };
 struct uthread {
   int tid;
   enum threadState state;
+  int wakeMeAt;
   //int lock;
 
   char *t_stack;

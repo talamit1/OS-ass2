@@ -49,9 +49,13 @@ int uthread_create(void (*start_func)(void *), void*arg){
   next_tid++;
   int addrSize=sizeof(int);
   threads[i].t_stack=malloc(STACK_SIZE);
-  *((int*)(threads[i].t_stack + STACK_SIZE - 3*addrSize)) = 0;
+  *((int*)(threads[i].t_stack + STACK_SIZE - 3*addrSize)) = (int)&uthread_exit;
   *((int*)(threads[i].t_stack + STACK_SIZE - 2*addrSize)) = (int)start_func;
   *((int*)(threads[i].t_stack + STACK_SIZE - 1*addrSize)) = (int)arg;
+
+
+  //set wakwMe to -1; check in schduler each time if wakeMeAt ==0
+  threads[i].wakeMeAt=-1;
 
   threads[i].t_esp=0;
   threads[i].t_ebp=0;
@@ -70,14 +74,23 @@ static void run_thread_func(void (*start_func)(void *), void* arg) {
 void uthread_schedule(){
   alarm(0);
 
+
+/**************************2.7********************/
+  int i;
+  for(i=0;i<MAX_UTHREADS; i++){
+    if(threads[i].wakeMeAt <= uptime() && threads[i].state==T_SLEEPING){
+      threads[i].wakeMeAt=-1;
+      threads[i].state=T_RUNNABLE;
+    }
+  }
+
   //change self thread to runnable mode
   if(threads[currThreadInd].state==T_RUNNING)
     threads[currThreadInd].state=T_RUNNABLE;
   
+  //beckup the esp and the ebp for the next run
   asm("movl %%esp, %0;" : "=r" (threads[currThreadInd].t_esp));
   asm("movl %%ebp, %0;" : "=r" (threads[currThreadInd].t_ebp));
-
-
 
   //update currThreadInd to next in turn
   currThreadInd++;
@@ -91,14 +104,14 @@ void uthread_schedule(){
   //set the new thread to running
   threads[currThreadInd].state=T_RUNNING;
 
-
+//this function handels to the restore of th stack of the current thread
 ////////////////////////////////////////////////////////////////////////////////
    if(threads[currThreadInd].t_esp == 0) {
     // First time the thread is being run. Set the stack to initial values and
     // jump to the run_thread_func
 
     int addrSize=sizeof(int);
-
+    //handel's the return from the function
     asm("movl %0, %%esp;" : : "r" (threads[currThreadInd].t_stack + STACK_SIZE - 3*addrSize));
     asm("movl %0, %%ebp;" : : "r" (threads[currThreadInd].t_stack + STACK_SIZE - 3*addrSize));
 
@@ -126,21 +139,21 @@ void uthread_exit(){
     threads[currThreadInd].state=T_UNUSED;
 
 
-    //join
+    //free threads waiting for join
     int j;
     for(j = 0; j < MAX_UTHREADS; ++j) {
       if (threads[j].state == T_SLEEPING) 
         threads[j].state = T_RUNNABLE;
     }
 
-
     //check if there is a live thread
     int i;
     for(i=0;i<MAX_UTHREADS;i++){
       if(threads[i].state!=T_UNUSED)
-        uthread_schedule();
+       uthread_schedule();
     }
 
+    //if we got here no one else alive
     exit();
 }
 
@@ -149,14 +162,12 @@ int uthred_self(){
 
 }
 
-
 ///////////////////////////////////////////////////////////////////
 
 int  uthred_join(int tid)
 {
   
-
-  if(tid < 0 || tid >= next_tid) {
+  if(tid < 0 || tid >= next_tid){
     return -1;
   }
 
@@ -188,9 +199,16 @@ search:
 
 
 int uthred_sleep(int ticks){
-	return 0;
+	
+  if(ticks < 0) 
+    return -1;  
+  
+  //critical code
+  threads[currThreadInd].wakeMeAt = uptime()+ticks;
+  threads[currThreadInd].state=T_SLEEPING;
+
+  alarm(0);
+  signal(14,uthread_schedule);
+    
+  return 0;
 }
-
-
-
-
