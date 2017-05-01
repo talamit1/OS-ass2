@@ -311,6 +311,7 @@ void checkPendingSignals(){
           
           proc->isHandelingSignal=1;
           uint runner=proc->pending;
+          //cprintf(" check:pand is: %d\n",proc->pending);
           uint sigNum;
           if(proc->pending==1)
             sigNum=0;
@@ -321,7 +322,7 @@ void checkPendingSignals(){
 
           proc->pending-=1<<sigNum;
           
-          cprintf("proc pending is: %d\n",proc->pending);
+          //cprintf("proc pending is: %d\n",proc->pending);
 
           sighandler_t handler = proc->handlers[sigNum];         
 
@@ -358,7 +359,7 @@ void updateAlarams(){
     if(p->alarmFlag >0){
       p->alarmFlag--;
       if(p->alarmFlag==0){
-        p->pending|=1<<13;
+        p->pending|=1<<14;
       }
     }
 
@@ -368,7 +369,7 @@ void updateAlarams(){
 int alarm(int ti){
   
   if(ti==0){
-    proc->pending ^=1<<13;
+    proc->pending ^=1<<14;
   }
 
   proc-> alarmFlag= ti;

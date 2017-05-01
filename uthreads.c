@@ -49,10 +49,17 @@ int uthread_create(void (*start_func)(void *), void*arg){
   next_tid++;
   int addrSize=sizeof(int);
   threads[i].t_stack=malloc(STACK_SIZE);
-  *((int*)(threads[i].t_stack + STACK_SIZE - 3*addrSize)) = (int)&uthread_exit;
+  // *((int*)(threads[i].t_stack + STACK_SIZE - 2*addrSize)) = (int)&uthread_exit;
+  // *((int*)(threads[i].t_stack + STACK_SIZE - 3*addrSize)) = (int)start_func;
+  // *((int*)(threads[i].t_stack + STACK_SIZE - 1*addrSize)) = (int)arg;
+  *((int*)(threads[i].t_stack + STACK_SIZE - 3*addrSize)) = 0; // This return address will never be used (The run_thread_func will never return)
   *((int*)(threads[i].t_stack + STACK_SIZE - 2*addrSize)) = (int)start_func;
   *((int*)(threads[i].t_stack + STACK_SIZE - 1*addrSize)) = (int)arg;
-
+  printf(2,"thread id is: %d\n",threads[i].tid);
+  printf(2,"my tid is: %d\n",uthred_self() );
+  printf(2,"thread stack  is: %d\n",threads[i].t_stack);
+  printf(2,"startfunc is %d\n",start_func);
+  printf(2,"thread startFunc is: %d\n",(*(threads[i].t_stack + STACK_SIZE - 2*addrSize)));
 
   //set wakwMe to -1; check in schduler each time if wakeMeAt ==0
   threads[i].wakeMeAt=-1;
@@ -60,20 +67,24 @@ int uthread_create(void (*start_func)(void *), void*arg){
   threads[i].t_esp=0;
   threads[i].t_ebp=0;
   threads[i].state=T_RUNNABLE;
-
+  
   alarm(UTHREAD_QUANTA);
   return threads[i].tid;
 } 
 
 static void run_thread_func(void (*start_func)(void *), void* arg) {
+  printf(2,"tallll%s\n"," iis gay" );
   alarm(UTHREAD_QUANTA);
+
   start_func(arg);
   uthread_exit();
-}
+  }
 
 void uthread_schedule(){
+  
+  //disable thread scheduling
   alarm(0);
-
+  //printf(2," %d\n",threads[currThreadInd].tid);
 
 /**************************2.7********************/
   int i;
@@ -112,9 +123,15 @@ void uthread_schedule(){
 
     int addrSize=sizeof(int);
     //handel's the return from the function
+    // asm("movl %0, %%esp;" : : "r" (threads[currThreadInd].t_stack + STACK_SIZE - 2*addrSize));
+    // asm("movl %0, %%ebp;" : : "r" (threads[currThreadInd].t_stack + STACK_SIZE - 2*addrSize));
+
     asm("movl %0, %%esp;" : : "r" (threads[currThreadInd].t_stack + STACK_SIZE - 3*addrSize));
     asm("movl %0, %%ebp;" : : "r" (threads[currThreadInd].t_stack + STACK_SIZE - 3*addrSize));
 
+    alarm(UTHREAD_QUANTA);
+    //asm("jmp *%0;" : : "r" (threads[currThreadInd].t_stack+STACK_SIZE-3*addrSize));
+    //printf(2,"jump jump \n");
     asm("jmp *%0;" : : "r" (run_thread_func));
   } else {
     // The thread is already running. Restore its stack, and then when the
@@ -181,7 +198,7 @@ search:
     if(threads[i].state != T_UNUSED && threads[i].tid == tid) {
       // Found the matching thread. Put the current thread to sleep
       threads[currThreadInd].state = T_SLEEPING;
-      uthread_schedule();
+      sigsend(14,getpid());
 
       // We arrive here after the current thread has been woken up. Jump up and
       // try again
@@ -208,7 +225,86 @@ int uthred_sleep(int ticks){
   threads[currThreadInd].state=T_SLEEPING;
 
   alarm(0);
-  signal(14,uthread_schedule);
+  sigsend(14,getpid());
     
   return 0;
 }
+
+////task 3 semaphores////////////////
+int bsem_alloc(){
+
+	struct binarySemaphore* mysem = malloc(sizeof (struct binarySemaphore));
+	mysem->count= 1;
+	mysem->state=UNLOCK;
+	mysem->numOfWaitings=0;
+	mysem->firstThreadInLine=0;
+	mysem->lasThreadInLine=0;
+	return (int)mysem;
+}
+void freeThreadQueue(struct binarySemaphore *sem){
+struct Link* temp=sem->firstThreadInLine;
+		while(temp->next!=0){
+			struct Link* t=temp;
+			temp=temp->next;
+			free(t);
+		}
+		free(temp);
+	}
+void bsem_free(int semDec){
+	struct binarySemaphore *sem =(struct binarySemaphore*) semDec;
+  if(sem->numOfWaitings>0){
+		freeThreadQueue(sem);
+	 }
+	free(sem);
+}
+
+void bsem_down(int semDec){
+  struct binarySemaphore *sem =(struct binarySemaphore*) semDec;
+  if(sem->state==UNLOCK && sem->numOfWaitings==0)
+  	sem->state=LOCK;
+  else{
+  	//this in case the locked is already aquired
+  	struct Link* newWait=malloc(sizeof (struct Link));
+  	int myTid=uthred_self();
+  	newWait->data=myTid;
+  	newWait->next=0;
+  	if(sem->numOfWaitings==0){
+  		//the case it is the first thread to wait
+  		sem->firstThreadInLine=newWait;
+  		
+  	}
+  	else{
+  		//insert the new thread at the end of the queue
+  		sem->lasThreadInLine->next=newWait;
+  		sem->lasThreadInLine=sem->lasThreadInLine->next;
+	}
+	sem->numOfWaitings++;
+	threads[myTid].state=T_SLEEPING;
+	sigsend(14,getpid());
+  }
+
+ }
+void bsem_up(int semDec){
+ struct binarySemaphore *sem =(struct binarySemaphore*) semDec;
+ if(sem->count==1)
+ 	return;
+ else{
+ 	  // Wake up all waiting  threads
+  	struct Link* l=sem->firstThreadInLine;
+  	while(l!=0){
+  		threads[l->data].state=T_RUNNABLE;
+
+  	}
+    sem->state=UNLOCK;
+  	sem->count=1;
+  	sem->numOfWaitings=0;
+  	sigsend(14,getpid());
+
+
+ }
+
+
+
+}
+
+
