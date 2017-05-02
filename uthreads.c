@@ -7,6 +7,7 @@ static struct uthread threads[MAX_UTHREADS];
 int next_tid;
 int currThreadInd;
 int nunOfThreads;
+int count;
 
 
 int uthread_init(){
@@ -24,7 +25,7 @@ int uthread_init(){
   
   if(signal(14,uthread_schedule)!=0)
   	return -1;
-  
+
   alarm(UTHREAD_QUANTA);
   return 0;
 
@@ -56,6 +57,8 @@ int uthread_create(void (*start_func)(void *), void*arg){
   *((int*)(threads[i].t_stack + STACK_SIZE - 2*addrSize)) = (int)start_func;
   *((int*)(threads[i].t_stack + STACK_SIZE - 1*addrSize)) = (int)arg;
   printf(2,"thread id is: %d\n",threads[i].tid);
+  printf(2,"count is: %d\n",count );
+  count++;
   printf(2,"my tid is: %d\n",uthred_self() );
   printf(2,"thread stack  is: %d\n",threads[i].t_stack);
   printf(2,"startfunc is %d\n",start_func);
@@ -67,43 +70,35 @@ int uthread_create(void (*start_func)(void *), void*arg){
   threads[i].t_esp=0;
   threads[i].t_ebp=0;
   threads[i].state=T_RUNNABLE;
-  
+
   alarm(UTHREAD_QUANTA);
   return threads[i].tid;
 } 
 
 static void run_thread_func(void (*start_func)(void *), void* arg) {
-  printf(2,"tallll%s\n"," iis gay" );
   alarm(UTHREAD_QUANTA);
-
+  printf(2,"arg is: %d\n",arg);
+  printf(2,"start func is %d\n",start_func);
   start_func(arg);
+  printf(2,"blabla bla\n");
   uthread_exit();
   }
 
 void uthread_schedule(){
-  
-  //disable thread scheduling
+ 
+  // This is necessary incase uthread_yield was explicitly called rather than
+  // being called from the alarm signal:
   alarm(0);
-  //printf(2," %d\n",threads[currThreadInd].tid);
 
-/**************************2.7********************/
-  int i;
-  for(i=0;i<MAX_UTHREADS; i++){
-    if(threads[i].wakeMeAt <= uptime() && threads[i].state==T_SLEEPING){
-      threads[i].wakeMeAt=-1;
-      threads[i].state=T_RUNNABLE;
-    }
+  if (threads[currThreadInd].state == T_RUNNING) {
+    threads[currThreadInd].state = T_RUNNABLE;
   }
 
-  //change self thread to runnable mode
-  if(threads[currThreadInd].state==T_RUNNING)
-    threads[currThreadInd].state=T_RUNNABLE;
-  
-  //beckup the esp and the ebp for the next run
   asm("movl %%esp, %0;" : "=r" (threads[currThreadInd].t_esp));
   asm("movl %%ebp, %0;" : "=r" (threads[currThreadInd].t_ebp));
 
-  //update currThreadInd to next in turn
+  // Switch to new thread
+
   currThreadInd++;
   while(threads[currThreadInd].state != T_RUNNABLE) {
     currThreadInd++;
@@ -112,26 +107,15 @@ void uthread_schedule(){
     }
   }
 
-  //set the new thread to running
-  threads[currThreadInd].state=T_RUNNING;
+  threads[currThreadInd].state = T_RUNNING;
 
-//this function handels to the restore of th stack of the current thread
-////////////////////////////////////////////////////////////////////////////////
-   if(threads[currThreadInd].t_esp == 0) {
+  if(threads[currThreadInd].t_esp == 0) {
     // First time the thread is being run. Set the stack to initial values and
     // jump to the run_thread_func
 
-    int addrSize=sizeof(int);
-    //handel's the return from the function
-    // asm("movl %0, %%esp;" : : "r" (threads[currThreadInd].t_stack + STACK_SIZE - 2*addrSize));
-    // asm("movl %0, %%ebp;" : : "r" (threads[currThreadInd].t_stack + STACK_SIZE - 2*addrSize));
+    asm("movl %0, %%esp;" : : "r" (threads[currThreadInd].t_stack + STACK_SIZE - 3*sizeof(int)));
+    asm("movl %0, %%ebp;" : : "r" (threads[currThreadInd].t_stack + STACK_SIZE - 3*sizeof(int)));
 
-    asm("movl %0, %%esp;" : : "r" (threads[currThreadInd].t_stack + STACK_SIZE - 3*addrSize));
-    asm("movl %0, %%ebp;" : : "r" (threads[currThreadInd].t_stack + STACK_SIZE - 3*addrSize));
-
-    alarm(UTHREAD_QUANTA);
-    //asm("jmp *%0;" : : "r" (threads[currThreadInd].t_stack+STACK_SIZE-3*addrSize));
-    //printf(2,"jump jump \n");
     asm("jmp *%0;" : : "r" (run_thread_func));
   } else {
     // The thread is already running. Restore its stack, and then when the
@@ -147,7 +131,7 @@ void uthread_schedule(){
 ///////////////////////////////////////////////////////////////////////////////
 void uthread_exit(){
 
-      
+    
     alarm(0);
     
     if(threads[currThreadInd].t_stack)

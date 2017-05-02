@@ -7,14 +7,14 @@
 
 typedef void (*sighandler_t)(int);
 
-void
-printA(void * a){
-    uthred_sleep(20);
- for(int i=0;i<100;i++){
-    printf(1,"*************************************tid MAY SHRMUTA:%d\n",uthred_self());
-     printf(2,"%d\n" ,i);
-}
-}
+// void
+// printA(void * a){
+//     uthred_sleep(20);
+//  for(int i=0;i<100;i++){
+//     printf(1,"*************************************tid MAY SHRMUTA:%d\n",uthred_self());
+//      printf(2,"%d\n" ,i);
+// }
+// }
 
 void
 printB(void * a){
@@ -34,15 +34,16 @@ printC(void * a){
 }
 }
 
-
+int count=0;
 int
 main(int argc, char *argv[]){
+	printf(2,"main count is: %d\n",count );
+	count++;
 printf(1,"------------------TestEx2----------------- \n");
-int a =44;
-int tal=19;
+
 uthread_init();
-uthread_create(printB,&a);
-uthread_create(printB,&tal);
+uthread_create(printB,0);
+uthread_create(printB,0);
 uthread_create(printB,0);
 uthread_create(printB,0);
 uthread_create(printB,0);
