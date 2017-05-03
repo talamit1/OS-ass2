@@ -280,7 +280,7 @@ int sigsend(int pid,int signum){
 
 void defHandler(int signum){
 
-  cprintf("A signal %d was accepted by process %d/n",signum,proc->pid);
+  cprintf("A signal %d was accepted by process %d\n",signum,proc->pid);
 
 }
 
@@ -303,12 +303,59 @@ sigretwrapper()
           "movl $24, %eax\n" // sigreturn number
           "int     $64");
 }
+// struct trapframe {
+//   // registers as pushed by pusha
+//   uint edi;
+//   uint esi;
+//   uint ebp;
+//   uint oesp;      // useless & ignored
+//   uint ebx;
+//   uint edx;
+//   uint ecx;
+//   uint eax;
+
+//   // rest of trap frame
+//   ushort gs;
+//   ushort padding1;
+//   ushort fs;
+//   ushort padding2;
+//   ushort es;
+//   ushort padding3;
+//   ushort ds;
+//   ushort padding4;
+//   uint trapno;
+
+//   // below here defined by x86 hardware
+//   uint err;
+//   uint eip;
+//   ushort cs;
+//   ushort padding5;
+//   uint eflags;
+
+//   // below here only when crossing rings, such as from user to kernel
+//   uint esp;
+//   ushort ss;
+//   ushort padding6;
+// };
+
+void printTrapframe(struct trapframe* tf){
+  cprintf("-----------printing trapfram------\n");
+  cprintf("tf->edi: %d\n",tf->edi);
+  cprintf("tf->eax: %d\n",tf->eax);
+  cprintf("tf->ebx: %d\n",tf->ebx);
+  cprintf("tf->esi: %d\n",tf->esi);
+  cprintf("tf->eip: %d\n",tf->eip);
+  cprintf("tf->esp: %d\n",tf->esp);
+
+}
+
 
 /*------------- task 1D ---------------*/
 //this function checks pending signals and handle them if necessery
 void checkPendingSignals(){
-  if(proc && (proc->tf->cs&3) == DPL_USER && !proc->isHandelingSignal  && (proc->pending != 0) ){
-          
+  if(proc && (proc->tf->cs&3) == DPL_USER   && (proc->pending != 0) ){
+    //cprintf("------------------------------------------------------\n");
+          //cprintf("ticks are: %d\n-------------",ticks);
           proc->isHandelingSignal=1;
           uint runner=proc->pending;
           //cprintf(" check:pand is: %d\n",proc->pending);
@@ -339,7 +386,11 @@ void checkPendingSignals(){
          nesp=nesp-sizeof(struct trapframe);
       
          memmove((void*)nesp,proc->tf,sizeof(struct trapframe));
-                 
+         struct trapframe* checker= (struct trapframe*) nesp;
+         printTrapframe(checker);
+         printTrapframe(proc->tf);
+
+
          nesp=nesp-sizeof(int);
          
          memmove((void*)nesp,&sigNum,sizeof(int));
@@ -349,6 +400,7 @@ void checkPendingSignals(){
          memmove((void*)nesp,&retAddress,sizeof(int));
 
          proc->tf->eip= (uint)proc->handlers[sigNum];
+
          proc->tf->esp=nesp;
 	   }
   }
@@ -367,7 +419,27 @@ void updateAlarams(){
 
 }
 int alarm(int ti){
-  
+ 
+if(ti <0)
+  return -1;
+
+int temp = ~1<<14;
+
+if(ti==0){
+  proc->pending &= temp;
+  return 0;}
+
+
+  proc->alarmFlag= ti;
+return 0;
+
+}
+
+
+
+
+
+ /* 
   if(ti==0){
     proc->pending ^=1<<14;
   }
@@ -375,7 +447,7 @@ int alarm(int ti){
   proc-> alarmFlag= ti;
 
   return 0;
-}
+}*/
 
 // Wait for a child process to exit and return its pid.
 // Return -1 if this process has no children.

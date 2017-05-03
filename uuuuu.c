@@ -1,12 +1,14 @@
 #include "types.h"
 #include "user.h"
 #include "uthreads.h"
-
+#include "x86.h"
 
 static struct uthread threads[MAX_UTHREADS];
 int next_tid;
 int currThreadInd;
 int numOfThreads;
+
+
 
 int uthread_init(){
   int i;
@@ -21,7 +23,8 @@ int uthread_init(){
   threads[currThreadInd].tid = 0;
   threads[currThreadInd].t_stack = 0; 
   threads[currThreadInd].state = T_RUNNING;
-  memset(&threads[0].t_tf,0,sizeof(struct trapframe));
+  threads[currThreadInd].t_esp=1;
+  threads[currThreadInd].t_ebp=1;
   
   if(signal(14,uthread_schedule)!=0)
     return -1;
@@ -32,6 +35,8 @@ int uthread_init(){
 }
   
 int uthread_create(void (*start_func)(void *), void*arg){
+  
+
   alarm(0);
 
   int i;
@@ -49,86 +54,51 @@ int uthread_create(void (*start_func)(void *), void*arg){
   int addrSize=sizeof(int);
   threads[i].t_stack=malloc(STACK_SIZE);
 
-  //*((int*)(threads[i].t_stack + STACK_SIZE - 3*addrSize)) = (int)start_func; // This return address will never be used (The run_thread_func will never return)
-  *((int*)(threads[i].t_stack + STACK_SIZE - 2*addrSize)) =  (int)uthread_exit;
+  *((int*)(threads[i].t_stack + STACK_SIZE - 3*addrSize)) = 0; // This return address will never be used (The run_thread_func will never return)
+  *((int*)(threads[i].t_stack + STACK_SIZE - 2*addrSize)) = (int)start_func;
   *((int*)(threads[i].t_stack + STACK_SIZE - 1*addrSize)) = (int)arg;
-  threads[i].t_ebp=(int)threads[i].t_stack+STACK_SIZE-2*addrSize;
+  threads[i].t_ebp=(int)threads[i].t_stack+STACK_SIZE-3*addrSize;
 
   //set wakwMe to -1; check in schduler each time if wakeMeAt ==0
   threads[i].wakeMeAt=-1;
   printf(2,"thread num: %d created\n",i );
   threads[i].t_esp=0;
   threads[i].t_ebp=0;
-  threads[i].t_eip=(int)start_func;
   threads[i].state=T_RUNNABLE;
   numOfThreads++;
-  memset((&threads[i].t_tf),0,sizeof(struct trapframe));
- 
+
   alarm(UTHREAD_QUANTA);
   return threads[i].tid;
 } 
-/*
+
 static void run_thread_func(void (*start_func)(void *), void* arg) {
   alarm(UTHREAD_QUANTA);
-
   start_func(arg);
 
   uthread_exit();
-  }*/
-void printTrapframe(struct trapframe* tf){
-  printf(2,"-----------printing trapfram from uthreads------\n");
-    printf(2,"tf of thread number: %d\n",uthred_self());
-  printf(2,"tf->edi: %d\n",tf->edi);
-  printf(2,"tf->eax: %d\n",tf->eax);
-  printf(2,"tf->ebx: %d\n",tf->ebx);
-  printf(2,"tf->esi: %d\n",tf->esi);
-  printf(2,"tf->eip: %d\n",tf->eip);
-  printf(2,"tf->esp: %d\n",tf->esp);
-  printf(2,"tf->ebp: %d\n",tf->ebp);
+  }
 
-
-}
 void uthread_schedule(){
   printf(2,"------------------------ticks are: %d ------------------\n",uptime());
 
   // This is necessary incase uthread_yield was explicitly called rather than
   // being called from the alarm signal:
   alarm(0);
-  printf(2,"printing only 0 tf\n");
-  printTrapframe(&threads[0].t_tf);
+
+
   if (threads[currThreadInd].state == T_RUNNING) {
     threads[currThreadInd].state = T_RUNNABLE;
   }
 
   //backup reg
-  asm("movl %%esp, %0;" : "=r" (threads[currThreadInd].t_esp));
-  asm("movl %%ebp, %0;" : "=r" (threads[currThreadInd].t_ebp));
-  //asm("movl %%eip, %0;" : "=r" (threads[currThreadInd].t_eip));
 
-
-
-  if(uthred_self()==0){
-    printf(2,"ebp is: %d\n",threads[currThreadInd].t_ebp );
-    threads[currThreadInd].t_tf.esp= threads[currThreadInd].t_esp;
-    threads[currThreadInd].t_tf.ebp=threads[currThreadInd].t_ebp;
-  }
-  printf(2,"current thread is:%d\n",currThreadInd);
-  printf(2,"picking trapframe from:%d\n",(threads[currThreadInd].t_ebp)+12);
-  //struct trapframe toBeckup = (threads[currThreadInd].t_ebp)+12;
-
-  printTrapframe(&threads[currThreadInd].t_tf);
-  memmove(&threads[currThreadInd].t_tf,(void*)threads[currThreadInd].t_ebp+12,sizeof(struct trapframe));
-  printTrapframe(&threads[currThreadInd].t_tf);
-
-  printf(2,"backing tf in %d\n", threads[currThreadInd].t_tf);
- 
-  printf(2,"---------------------tt--------\n");
 
 
   //threads[currThreadInd]. ut_tf =  (struct trapframe)(threads[currThreadInd].t_esp)+8;
 
   // Switch to new thread
-
+  asm("movl %%esp, %0;" : "=r" (threads[currThreadInd].t_esp));
+  asm("movl %%ebp, %0;" : "=r" (threads[currThreadInd].t_ebp));
   currThreadInd++;
   while(threads[currThreadInd].state != T_RUNNABLE) {
     currThreadInd++;
@@ -136,61 +106,58 @@ void uthread_schedule(){
       currThreadInd = 0;  
     }
   }
+   if(threads[currThreadInd].tid==0){
+    currThreadInd++;
+
+  }
+
 
   threads[currThreadInd].state = T_RUNNING;
   printf(2,"cirretn thread is:%d\n",currThreadInd);
   if(threads[currThreadInd].t_esp == 0) { 
-    printf(2,"talllllllttttttttttttt************\n");
-    asm("movl %0, %%esp;" : : "r" (threads[currThreadInd].t_stack + STACK_SIZE - 2*sizeof(int)));
-    asm("movl %0, %%ebp;" : : "r" (threads[currThreadInd].t_stack + STACK_SIZE - 2*sizeof(int)));
+ printf(2,"esp is  \n" );
+    asm("movl %0, %%esp;" : : "r" (threads[currThreadInd].t_stack + STACK_SIZE - 3*sizeof(int)));
+    asm("movl %0, %%ebp;" : : "r" (threads[currThreadInd].t_stack + STACK_SIZE - 3*sizeof(int)));
    
-
-    alarm(UTHREAD_QUANTA);
-    asm("jmp *%0;" : : "r" (threads[currThreadInd].t_eip));
+    asm("jmp *%0;" : : "r" (run_thread_func));
   } else {
     // The thread is already running. Restore its stack, and then when the
     // current call to uthread_yield returns, execution will return to where
     // the thread was previously executing.
-    printf(2,"%rotttttttt\n" );
-    printf(2,"trapframe picked from:%d\n", threads[currThreadInd].t_tf);
-    memmove((void*)(threads[currThreadInd].t_ebp+24),&threads[currThreadInd].t_tf,sizeof(struct trapframe));
+    asm("movl %0, %%esp;" : : "r" (threads[currThreadInd].t_esp));
+    asm("movl %0, %%ebp;" : : "r" (threads[currThreadInd].t_ebp));
     alarm(UTHREAD_QUANTA);
   }
 }
 ///////////////////////////////////////////////////////////////////////////////
 void uthread_exit(){
 
-    
+    printf(2,"ssssssssssssssssss\n" );
     alarm(0);
       
     if(threads[currThreadInd].t_stack)
       free(threads[currThreadInd].t_stack);
 
     threads[currThreadInd].state=T_UNUSED;
+    threads[currThreadInd].t_stack=0;
          
 
-    //free threads waiting for join
-    int j;
-    currThreadInd++;
-    for(j = 0; j < MAX_UTHREADS; ++j) {
-      if (threads[j].state == T_SLEEPING) 
-        threads[j].state = T_RUNNABLE;
-    }
+
 
     //check if there is a live thread
     int i;
-    for(i=0;i<MAX_UTHREADS;i++){
+    int numOfRunningThreads=1;
+    for(i=1;i<MAX_UTHREADS;i++){
       if(threads[i].state!=T_UNUSED){
-        alarm(UTHREAD_QUANTA);
-        while(1){
-          int i=1+2;
-          printf(2,"%d\n",i);
+          numOfRunningThreads++;
         }
       }
-    }
+    
 
-    //if we got here no one else alive
-    exit();
+    if(numOfRunningThreads==1)
+      exit();
+
+    sigsend(14,getpid());
 }
 
 int uthred_self(){

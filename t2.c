@@ -25,14 +25,14 @@ printB(void * a){
 }
 }
 
-void
-printC(void * a){
- //uthred_join(2);   
- for(int i=200;i<300;i++){
-     printf(1,"*************************************tid:%d\n",uthred_self());
-     printf(2,"%d\n" ,i);
-}
-}
+// void
+// printC(void * a){
+//  //uthred_join(2);   
+//  for(int i=200;i<300;i++){
+//      printf(1,"*************************************tid:%d\n",uthread_self());
+//      printf(2,"%d\n" ,i);
+// }
+// }
 
 int count=0;
 int
