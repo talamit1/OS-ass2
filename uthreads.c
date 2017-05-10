@@ -7,7 +7,7 @@ static struct uthread threads[MAX_UTHREADS];
 int next_tid;
 int currThreadInd;
 int numOfThreads;
-
+ printf(2,"sssssss%s\n");
 int uthread_init(){
   int i;
   for(i=0;i<MAX_UTHREADS;i++){
@@ -33,7 +33,7 @@ int uthread_init(){
   
 int uthread_create(void (*start_func)(void *), void*arg){
   alarm(0);
-
+ 
   int i;
   //int found=0;
   for(i = 0;i<MAX_UTHREADS /*&& !found*/; i++)

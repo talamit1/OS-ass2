@@ -242,6 +242,40 @@ exit(void)
 /* ---------------task 1B ------------- */
 //register a new signal handler to the process handlers
 
+//function to print trapframe;
+void printTrapframe(struct trapframe* tf){
+  cprintf("-----------printing trapfram from kernel------\n");
+  cprintf("tf->edi: %d\n",tf->edi);
+  cprintf("tf->esi: %d\n",tf->esi);
+  cprintf("tf->ebp: %d\n",tf->ebp);
+  cprintf("tf->oesp: %d\n",tf->oesp);
+  cprintf("tf->ebx: %d\n",tf->ebx);
+  cprintf("tf->edx: %d\n",tf->edx);
+  cprintf("tf->ecx: %d\n",tf->ecx);
+  cprintf("tf->eax: %d\n",tf->eax);
+  
+  cprintf("tf->gs: %d\n",tf->gs);
+  cprintf("tf->padding1: %d\n",tf->padding1);
+  cprintf("tf->fs: %d\n",tf->fs);
+  cprintf("tf->padding2: %d\n",tf->padding2);
+  cprintf("tf->es: %d\n",tf->es);
+  cprintf("tf->padding3: %d\n",tf->padding3);
+  cprintf("tf->ds: %d\n",tf->ds);
+  cprintf("tf->padding4: %d\n",tf->padding4);
+  cprintf("tf->trapno: %d\n",tf->trapno);
+
+
+  cprintf("tf->err: %d\n",tf->err); 
+  cprintf("tf->eip: %d\n",tf->eip);
+  cprintf("tf->cs: %d\n",tf->cs);
+  cprintf("tf->padding5: %d\n",tf->padding5); 
+  cprintf("tf->eflags: %d\n",tf->eflags);
+
+  cprintf("tf->esp: %d\n",tf->esp);
+  cprintf("tf->ss: %d\n",tf->ss);
+  cprintf("tf->padding6: %d\n",tf->padding6);
+
+}
 
 sighandler_t signal(int signum,sighandler_t handler){
   if(!proc || signum<0 || signum>=NUMSIG) 
@@ -286,12 +320,22 @@ void defHandler(int signum){
 
 int sigreturn(void){ 
 
-   
-  proc->tf->esp+=8;
-  memmove(proc->tf,(uint*)proc->tf->esp,sizeof(struct trapframe));
+  cprintf("-----------proc tf when starting sigreturn:-----\n "); 
+  //printTrapframe(proc->tf); 
+
+
+  int has_lk = holding(&ptable.lock);
+  if (!has_lk) acquire(&ptable.lock);
+  memmove(proc->tf,(void*)(proc->tf->ebp + 8),sizeof(struct trapframe)); // backup trapframe on user stack
+  if (! has_lk) release(&ptable.lock);
+  return 0;
+  
+
+  
+  // cprintf("-----------proc tf at the end of sigreturn:-----\n ");
+  // printTrapframe(proc->tf);   
   
   
-  proc->isHandelingSignal=0;
  
  return 0;
 }
@@ -303,51 +347,7 @@ sigretwrapper()
           "movl $24, %eax\n" // sigreturn number
           "int     $64");
 }
-// struct trapframe {
-//   // registers as pushed by pusha
-//   uint edi;
-//   uint esi;
-//   uint ebp;
-//   uint oesp;      // useless & ignored
-//   uint ebx;
-//   uint edx;
-//   uint ecx;
-//   uint eax;
 
-//   // rest of trap frame
-//   ushort gs;
-//   ushort padding1;
-//   ushort fs;
-//   ushort padding2;
-//   ushort es;
-//   ushort padding3;
-//   ushort ds;
-//   ushort padding4;
-//   uint trapno;
-
-//   // below here defined by x86 hardware
-//   uint err;
-//   uint eip;
-//   ushort cs;
-//   ushort padding5;
-//   uint eflags;
-
-//   // below here only when crossing rings, such as from user to kernel
-//   uint esp;
-//   ushort ss;
-//   ushort padding6;
-// };
-
-void printTrapframe(struct trapframe* tf){
-  cprintf("-----------printing trapfram------\n");
-  cprintf("tf->edi: %d\n",tf->edi);
-  cprintf("tf->eax: %d\n",tf->eax);
-  cprintf("tf->ebx: %d\n",tf->ebx);
-  cprintf("tf->esi: %d\n",tf->esi);
-  cprintf("tf->eip: %d\n",tf->eip);
-  cprintf("tf->esp: %d\n",tf->esp);
-
-}
 
 
 /*------------- task 1D ---------------*/
@@ -355,10 +355,8 @@ void printTrapframe(struct trapframe* tf){
 void checkPendingSignals(){
   if(proc && (proc->tf->cs&3) == DPL_USER   && (proc->pending != 0) ){
     //cprintf("------------------------------------------------------\n");
-          //cprintf("ticks are: %d\n-------------",ticks);
-          proc->isHandelingSignal=1;
+          
           uint runner=proc->pending;
-          //cprintf(" check:pand is: %d\n",proc->pending);
           uint sigNum;
           if(proc->pending==1)
             sigNum=0;
@@ -379,29 +377,41 @@ void checkPendingSignals(){
             return;}
  		            
          uint nesp = proc->tf->esp-(&checkPendingSignals-&sigretwrapper);
-        
+         // cprintf("-----------proc tf at checking signal it on the stack:-----\n ") ;
+         // printTrapframe(proc->tf);
          int retAddress=nesp;
          memmove((void*)nesp,sigretwrapper,&checkPendingSignals-&sigretwrapper);
+         nesp-=4;
+         uint tfFlag=0xABCDEF;
+         memmove((void*)nesp,&tfFlag,sizeof(uint));
          
-         nesp=nesp-sizeof(struct trapframe);
-      
+         nesp-=sizeof(struct trapframe);
          memmove((void*)nesp,proc->tf,sizeof(struct trapframe));
-         struct trapframe* checker= (struct trapframe*) nesp;
-         printTrapframe(checker);
-         printTrapframe(proc->tf);
 
+        //cprintf("trapframe put at : %d\n",nesp);
+         //cprintf("--------the tf proc->tf int checkingSignals is:--------");
+         //printTrapframe(proc->tf);
+         //cprintf("--------------------gg------------------");
+         //cprintf("--------the tf pushed on the stack int checkingSignals is:--------");
+         //printTrapframe((struct trapframe*)&nesp);
+         //cprintf("--------------------llll------------------");
 
+         //pushing sigNumber(sighandler arguments)
          nesp=nesp-sizeof(int);
-         
          memmove((void*)nesp,&sigNum,sizeof(int));
-         
-         nesp=nesp-sizeof(int);
-         
+         //pushing the sigreturn return adress
+         nesp=nesp-sizeof(int*);
          memmove((void*)nesp,&retAddress,sizeof(int));
+         cprintf("retAdress put on place: %d\n",nesp);
 
-         proc->tf->eip= (uint)proc->handlers[sigNum];
 
-         proc->tf->esp=nesp;
+           int has_lk = holding(&ptable.lock);
+           if (!has_lk) acquire(&ptable.lock);
+          // change user eip so that user will run the signal handler next
+          proc->tf->eip = (uint)proc->handlers[sigNum];
+          proc->tf->ebp = nesp;
+          proc->tf->esp = nesp;
+          if (! has_lk) release(&ptable.lock);
 	   }
   }
 

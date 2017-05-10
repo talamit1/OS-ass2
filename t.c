@@ -5,6 +5,14 @@ typedef void (*sighandler_t)(int);
 
 void
 test(int sigNum){
+	int i=1;
+	int j=2;
+	int r=i+j;
+	printf(2,"%d\n",i );
+		printf(2,"%d\n",j );
+
+	printf(2,"%d\n",r);
+
  printf(1,"\n=======================Signal Handler===================================\n Process id:  %d  Signal number: %d \n\n", getpid(),sigNum);
 }
 

@@ -1,7 +1,7 @@
 #include "types.h"
 #include "user.h"
 #include "stat.h"
-#include "uthreads.h"
+#include "uthread.h"
 
 
 void tthread1(void *arg) {
@@ -21,6 +21,8 @@ void tthread2(void *arg) {
 void tthread3(void *arg) {
   int i;
   for(i = 0; i < 150; i++) {
+    
+
     printf(1, " 3333333333333333333333333333333333333333333333333333 %d \n",i);
   }
 }
