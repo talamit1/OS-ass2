@@ -1,62 +1,47 @@
+/**
+wait for all threads to die. then exit()
+**/
 
-// #include "types.h"
-// #include "user.h"
-// #include "stat.h"
-// #include "uthread.h"
+#include "types.h"
+#include "user.h"
+#include "stat.h"
+#include "uthread.h"
 
+#define NUM_OF_ITERATIONS 75
 
-// typedef void (*sighandler_t)(int);
+void tthread1(void *arg) {
+  int i;
+  for(i = 0; i < NUM_OF_ITERATIONS; i++) {
+    printf(1, " 11111111111111111111111111111111111111111111111111111 %d \n",i);
+  }
+}
 
-// // void
-// // printA(void * a){
-// //     uthred_sleep(20);
-// //  for(int i=0;i<100;i++){
-// //     printf(1,"*************************************tid MAY SHRMUTA:%d\n",uthred_self());
-// //      printf(2,"%d\n" ,i);
-// // }
-// // }
+void tthread2(void *arg) {
+  int i;
+  for(i = 0; i < NUM_OF_ITERATIONS; i++) {
+    printf(1, " 2222222222222222222222222222222222222222222222222222 %d \n",i);
+  }
+}
 
-// void
-// printB(void * a){
-//  //uthred_join(1);   
-//  for(int i=0;i<500;i++){
-//      printf(1,"*************************************tid:%d\n",uthread_self());
-//      printf(2,"%d\n" ,i);
-// }
-// }
+void tthread3(void *arg) {
+  int i;
+  for(i = 0; i < NUM_OF_ITERATIONS; i++) {
+    printf(1, " 3333333333333333333333333333333333333333333333333333 %d \n",i);
+  }
+}
 
-// // void
-// // printC(void * a){
-// //  //uthred_join(2);   
-// //  for(int i=200;i<300;i++){
-// //      printf(1,"*************************************tid:%d\n",uthread_self());
-// //      printf(2,"%d\n" ,i);
-// // }
-// // }
-
-// int count=0;
-// int
-// main(int argc, char *argv[]){
-// 	printf(2,"main count is: %d\n",count );
-// 	count++;
-// printf(1,"------------------TestEx2----------------- \n");
-
-// uthread_init();
-// uthread_create(printB,0);
-// uthread_create(printB,0);
-// uthread_create(printB,0);
-// uthread_create(printB,0);
-// uthread_create(printB,0);
-// uthread_create(printB,0);
-// uthread_create(printB,0);
-// uthread_create(printB,0);
-// printf(1,"*********************1************tid:%d\n",uthread_self());
-// // for(int i=1;i<20;i++)
-// // {
-// //      uthred_sleep(8);
-     
-// // }
-
-// printf(1,"ByeByeMain");
-// exit();
-// }
+int main(int argc, char *argv[]) {
+	int id1,id2,id3;
+	printf(1,"-=-=-=-=-=-=-=-=-=-=-TEXT USER LEVEL THREAD-=-=-=-=-=-=-=-=-=-=-\n");
+	uthread_init();
+	id1= uthread_create(tthread1, (void*)555);
+	id2= uthread_create(tthread2, (void*)555);
+	id3= uthread_create(tthread3, (void*)555);
+	
+	uthread_join(id1);
+	//printf(1, "\n **************id2 is %d \n", id2);
+	uthread_join(id2);
+	uthread_join(id3);
+	
+	exit();
+}

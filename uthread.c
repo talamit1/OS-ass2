@@ -6,7 +6,8 @@ int numOfThreads = 0;
 struct uthread* current;
 struct uthread u_table[MAX_UTHREADS];
 
-struct bsem* bsemtable[MAX_BSEM];
+struct bisem* bisemtable[MAX_BSEM+1];
+
 
 // void
 // uthread_schedule_wrapper(int signum){
@@ -24,6 +25,8 @@ uthread_init()
   mainT->pid = getpid();
   mainT->state = T_RUNNING;
   mainT->t_stack = 0; 
+  mainT->ind=0;
+
   numOfThreads++;
   current = mainT;
   signal(SIGALRM, (sighandler_t) uthread_schedule);
@@ -37,16 +40,20 @@ uthread_create(void (*start_func)(void*), void* arg)
   alarm(0);//disabling SIGALARM interupts to make uthread_create an atomic method
   struct uthread *nextT;
   uint newSp;
+  int count=0;
 
   for(nextT = u_table; nextT < &u_table[MAX_UTHREADS]; nextT++){
-    if(nextT->state == T_UNUSED)
+    if(nextT->state == T_UNUSED){
       goto found;
+    }
+    count++;
   }
   //arrive here if there is no more room for another threads
   return -1;
 
   found:
     numOfThreads++;
+    nextT->ind=count;
     nextT->tid = nexttid++;
     nextT->pid = getpid();
     nextT->tf = current->tf;
@@ -204,4 +211,112 @@ int uthread_sleep(int ticks)
   return 0;
 }
 
+
+//this function return the next available semaphore descriptor
+//return descriptor of 1-MAX_BISEM id sucsess and -1 if fail
+int findNextDecriptor(){
+	int ans=-1;;
+	for(int i=1;i<MAX_BSEM+1;i++){
+		if(bisemtable[i]==0){
+			ans=i;
+			break;
+		}
+	}
+	return ans;
+}
+
+ int bsem_alloc(void){
+ 	
+ 	int desc=findNextDecriptor();
+ 	
+
+ 	bisemtable[desc]=malloc(sizeof(struct bisem));
+ 	
+ 	bisemtable[desc]->s=1;
+ 	bisemtable[desc]->lastWaitingInd=0;
+ 	bisemtable[desc]->totalWaitingThreads=0;
+
+
+ 	return desc;
+ }
+ void bsem_free(int sem){
+ 	if(bisemtable[sem]->totalWaitingThreads==0){
+ 		free(bisemtable[sem]);
+ 		bisemtable[sem]=0;
+ 	}
+ 	else{
+ 		printf(2,"There are still threads waiting on semaphore");
+ 	}
+ 	
+ }
+ void bsem_down(int sem){
+ 	alarm(0);
+ 	struct bisem* thisSem=bisemtable[sem];
+ 	if(thisSem->s==0){
+ 		thisSem->s=1;
+ 	}
+ 	else{
+ 		//insert the waiting thread index at u_table  to to the semaphre queue
+ 		thisSem->waitingThreads[thisSem->lastWaitingInd]=current->ind;
+ 		uthread_sleep(0);
+ 		thisSem->lastWaitingInd++;
+ 		thisSem->totalWaitingThreads++;
+ 	}
+ 	alarm(UTHREAD_QUANTA);
+ }
+ void bsem_up(int sem){
+ 	struct bisem* thisSem=bisemtable[sem];
+
+ 	alarm(0);
+ 	if(thisSem->totalWaitingThreads>0){
+ 		int firstInQ=thisSem->waitingThreads[0];
+ 		u_table[firstInQ].state=T_RUNNABLE;
+ 		int i=0,j=1;
+ 		while(j<thisSem->lastWaitingInd){
+ 			thisSem->waitingThreads[i]=thisSem->waitingThreads[j];
+ 		}
+ 		
+ 		thisSem->waitingThreads[thisSem->lastWaitingInd]=0;
+ 		thisSem->lastWaitingInd--;
+ 		thisSem->totalWaitingThreads--;
+ 		
+ 		if(thisSem->totalWaitingThreads==0){
+ 			thisSem->s=1;
+ 		}
+ 	}
+ 	alarm(UTHREAD_QUANTA);
+ }
+ struct counting_semaphore* csem_alloc(int init_val){
+ 	struct counting_semaphore* newCSem=malloc(sizeof(struct counting_semaphore));
+
+ 	newCSem->s1=bsem_alloc();
+ 	newCSem->s2=bsem_alloc();
+ 	if(init_val<1){
+ 		bsem_down(newCSem->s2);
+ 	}
+ 	newCSem->val=init_val;
+ 	return newCSem;
+
+ }
+  void csem_free(struct counting_semaphore* cSem){
+  	bsem_free(cSem->s1);
+  	bsem_free(cSem->s2);
+  	free(cSem);
+
+  }
+ void down(struct counting_semaphore* cSem){
+ bsem_down(cSem->s2);
+  bsem_down(cSem->s1);
+  cSem->val--;
+  if(cSem->val > 0)
+    bsem_up(cSem->s2);
+  bsem_up(cSem->s1);
+ }
+ void up(struct counting_semaphore* cSem){
+  bsem_down(cSem->s1);
+  cSem->val++;
+  if(cSem->val ==1)
+    bsem_up(cSem->s2);
+  bsem_up(cSem->s1);
+ }
 
