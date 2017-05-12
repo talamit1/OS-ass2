@@ -1,0 +1,1094 @@
+diff --git a/Makefile b/Makefile
+index c6159fe..df6f038 100644
+--- a/Makefile
++++ b/Makefile
+@@ -137,7 +137,7 @@ tags: $(OBJS) entryother.S _init
+ vectors.S: vectors.pl
+ 	perl vectors.pl > vectors.S
+ 
+-ULIB = ulib.o usys.o printf.o umalloc.o
++ULIB = ulib.o usys.o printf.o umalloc.o uthread.o
+ 
+ _%: %.o $(ULIB)
+ 	$(LD) $(LDFLAGS) -N -e main -Ttext 0 -o $@ $^
+@@ -175,6 +175,8 @@ UPROGS=\
+ 	_usertests\
+ 	_wc\
+ 	_zombie\
++	_sanity\
++	
+ 
+ fs.img: mkfs README $(UPROGS)
+ 	./mkfs fs.img README $(UPROGS)
+@@ -211,7 +213,7 @@ QEMUGDB = $(shell if $(QEMU) -help | grep -q '^-gdb'; \
+ 	then echo "-gdb tcp::$(GDBPORT)"; \
+ 	else echo "-s -p $(GDBPORT)"; fi)
+ ifndef CPUS
+-CPUS := 2
++CPUS := 1
+ endif
+ QEMUOPTS = -drive file=fs.img,index=1,media=disk,format=raw -drive file=xv6.img,index=0,media=disk,format=raw -smp $(CPUS) -m 512 $(QEMUEXTRA)
+ 
+@@ -242,9 +244,9 @@ qemu-nox-gdb: fs.img xv6.img .gdbinit
+ # check in that version.
+ 
+ EXTRA=\
+-	mkfs.c ulib.c user.h cat.c echo.c forktest.c grep.c kill.c\
++	sanity.c   mkfs.c ulib.c user.h cat.c echo.c forktest.c grep.c kill.c\
+ 	ln.c ls.c mkdir.c rm.c stressfs.c usertests.c wc.c zombie.c\
+-	printf.c umalloc.c\
++	printf.c umalloc.c \
+ 	README dot-bochsrc *.pl toc.* runoff runoff1 runoff.list\
+ 	.gdbinit.tmpl gdbutil\
+ 
+diff --git a/defs.h b/defs.h
+index 300c75c..ce6f25d 100644
+--- a/defs.h
++++ b/defs.h
+@@ -116,6 +116,12 @@ void            userinit(void);
+ int             wait(void);
+ void            wakeup(void*);
+ void            yield(void);
++sighandler_t    signal(int, sighandler_t);
++int             sigsend(int, int);
++int             sigreturn(void);
++int             alarm(int);
++void            updateAlarms(void);
++
+ 
+ // swtch.S
+ void            swtch(struct context**, struct context*);
+@@ -183,4 +189,4 @@ int             copyout(pde_t*, uint, void*, uint);
+ void            clearpteu(pde_t *pgdir, char *uva);
+ 
+ // number of elements in fixed-size array
+-#define NELEM(x) (sizeof(x)/sizeof((x)[0]))
++#define NELEM(x) (sizeof(x)/sizeof((x)[0]))
+\ No newline at end of file
+diff --git a/param.h b/param.h
+index a7e90ef..d3075ee 100644
+--- a/param.h
++++ b/param.h
+@@ -10,5 +10,10 @@
+ #define MAXOPBLOCKS  10  // max # of blocks any FS op writes
+ #define LOGSIZE      (MAXOPBLOCKS*3)  // max data blocks in on-disk log
+ #define NBUF         (MAXOPBLOCKS*3)  // size of disk block cache
+-#define FSSIZE       1000  // size of file system in blocks
+-
++#define FSSIZE       1000 // size of file system in blocks
++#define NUMSIG       32   // maximum number of signals for a single process.
++#define SIGALRM      14   // alram signal number is 14
++#define MAX_UTHREADS 64  //maximum number of concurrent user level threads
++#define STACKSIZE 4096  // size of per-thread user stack
++#define UTHREAD_QUANTA 5 // the number of ticks in the quanta of a preamptive user thread
++#define MAX_BSEM     128 // max number of concurrent binary semphores
+\ No newline at end of file
+diff --git a/proc.c b/proc.c
+index 7d03ad7..f3d926c 100644
+--- a/proc.c
++++ b/proc.c
+@@ -7,6 +7,8 @@
+ #include "proc.h"
+ #include "spinlock.h"
+ 
++
++
+ struct {
+   struct spinlock lock;
+   struct proc proc[NPROC];
+@@ -20,6 +22,9 @@ extern void trapret(void);
+ 
+ static void wakeup1(void *chan);
+ 
++#define SIG_DFL 0;
++//2^0 up to 2^31 used to set pending signals
++
+ void
+ pinit(void)
+ {
+@@ -85,7 +90,7 @@ userinit(void)
+   extern char _binary_initcode_start[], _binary_initcode_size[];
+ 
+   p = allocproc();
+-  
++
+   initproc = p;
+   if((p->pgdir = setupkvm()) == 0)
+     panic("userinit: out of memory?");
+@@ -103,6 +108,11 @@ userinit(void)
+   safestrcpy(p->name, "initcode", sizeof(p->name));
+   p->cwd = namei("/");
+ 
++  p->pending = 0;
++  // set default sig handlers
++  for(int sig = 0; sig < NUMSIG; sig++)
++    p->handlers[sig] = SIG_DFL;
++
+   // this assignment to p->state lets other cores
+   // run this process. the acquire forces the above
+   // writes to be visible, and the lock is also needed
+@@ -171,6 +181,10 @@ fork(void)
+ 
+   pid = np->pid;
+ 
++  // copy parnt's sig handlers
++  for(int sig = 0; sig < NUMSIG; sig++)
++    np->handlers[sig] = proc->handlers[sig];
++
+   acquire(&ptable.lock);
+ 
+   np->state = RUNNABLE;
+@@ -252,6 +266,11 @@ wait(void)
+         p->name[0] = 0;
+         p->killed = 0;
+         p->state = UNUSED;
++        p->pending = 0;
++        for(int sig = 0; sig < NUMSIG; sig++)
++          p->handlers[sig] = SIG_DFL;
++        p->isHandlingsignal = 0;
++        p->alarmFlag = 0;
+         release(&ptable.lock);
+         return pid;
+       }
+@@ -483,3 +502,218 @@ procdump(void)
+     cprintf("\n");
+   }
+ }
++
++
++void printTrapframe(struct trapframe* tf){
++  cprintf("-----------printing trapfram from kernel------\n");
++  cprintf("tf->edi: %d\n",tf->edi);
++  cprintf("tf->esi: %d\n",tf->esi);
++  cprintf("tf->ebp: %d\n",tf->ebp);
++  cprintf("tf->oesp: %d\n",tf->oesp);
++  cprintf("tf->ebx: %d\n",tf->ebx);
++  cprintf("tf->edx: %d\n",tf->edx);
++  cprintf("tf->ecx: %d\n",tf->ecx);
++  cprintf("tf->eax: %d\n",tf->eax);
++  
++  cprintf("tf->gs: %d\n",tf->gs);
++  cprintf("tf->padding1: %d\n",tf->padding1);
++  cprintf("tf->fs: %d\n",tf->fs);
++  cprintf("tf->padding2: %d\n",tf->padding2);
++  cprintf("tf->es: %d\n",tf->es);
++  cprintf("tf->padding3: %d\n",tf->padding3);
++  cprintf("tf->ds: %d\n",tf->ds);
++  cprintf("tf->padding4: %d\n",tf->padding4);
++  cprintf("tf->trapno: %d\n",tf->trapno);
++
++
++  cprintf("tf->err: %d\n",tf->err); 
++  cprintf("tf->eip: %d\n",tf->eip);
++  cprintf("tf->cs: %d\n",tf->cs);
++  cprintf("tf->padding5: %d\n",tf->padding5); 
++  cprintf("tf->eflags: %d\n",tf->eflags);
++
++  cprintf("tf->esp: %d\n",tf->esp);
++  cprintf("tf->ss: %d\n",tf->ss);
++  cprintf("tf->padding6: %d\n",tf->padding6);
++
++}
++
++
++// default signal handler RETURN??
++void
++def_Hendler(int signum){
++  cprintf("A signal %d was accepted by %d\n",signum,proc->pid);
++  return;
++}
++
++// sets the signal handler "handler" for the signal "signum"
++sighandler_t
++signal(int signum, sighandler_t handler)
++{
++  if(signum < 0 || signum >= NUMSIG)
++    return (sighandler_t)(-1);
++  sighandler_t old_handler = proc->handlers[signum];
++  int has_lk = holding(&ptable.lock);
++  if (!has_lk) acquire(&ptable.lock);
++  proc->handlers[signum] = handler;
++  if (! has_lk) release(&ptable.lock);
++  return old_handler;
++}
++
++// sends the signal "signum" to procees "pid"
++int
++sigsend(int pid, int signum)
++{
++  struct proc *p;
++
++  if(signum < 0 || signum >= NUMSIG)
++    return -1;
++
++  int has_lk = holding(&ptable.lock);
++  if (!has_lk) acquire(&ptable.lock);
++  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
++    if(p->pid == pid){
++      p->pending |= 1<<signum;
++      if (! has_lk) release(&ptable.lock);
++      return 0;
++    }
++  }
++  if (! has_lk) release(&ptable.lock);
++  return -1;
++}
++
++
++
++// code copied to users stack in order to call sig_return upon signal handlers completion
++void
++sigretwrapper()
++{
++  // simulate calling sigreturn() by pushing 0 which is argc,
++  // putting 24 which is SYS_sigreturn in eax and delaring int 64 (interupt handler)
++  asm("pushl $0; movl $24, %eax; int $64;");
++
++}
++
++
++uint findTrapframe(uint sp){
++  uint ans=sp;
++  uint runner=*(int*)ans;
++  while(runner!=0xABCDEF){
++    ans+=4;
++    runner=*(int*)ans;
++  }
++  ans-=sizeof(struct trapframe);
++  return ans;
++}
++
++// (system call) retuen from a signal handler
++int
++sigreturn()
++{
++  int has_lk = holding(&ptable.lock);
++  if (!has_lk) acquire(&ptable.lock);
++  if(memmove(proc->tf,(void*)(proc->tf->ebp + 8),sizeof(struct trapframe)) < 0){ // backup trapframe on user stack
++    proc->isHandlingsignal = 0;
++    if (! has_lk) release(&ptable.lock);
++    return -1;
++  }
++  proc->isHandlingsignal = 0;
++  if (! has_lk) release(&ptable.lock);
++  return 0;
++}
++
++void
++checkPEndingSignals(struct trapframe* tf)
++{
++  if(proc == 0 || proc->pending == 0 || proc->isHandlingsignal || (tf->cs &  3) != DPL_USER)
++    return;
++  int signum;
++  for(signum=0; signum<NUMSIG; signum++){
++    if(proc->pending & 1 << signum){
++      goto handle;
++    }
++  }
++  return;
++  int has_lk;
++  handle:
++    has_lk= holding(&ptable.lock);
++    if (!has_lk) acquire(&ptable.lock);
++      proc->pending ^=  1 << signum; // remove signal signum for pending signals
++    if (! has_lk) release(&ptable.lock);
++
++    if(proc->handlers[signum]){
++      uint sigWrapperSize = (uint)sigreturn - (uint)sigretwrapper;
++      void* retAddress;
++      uint nesp = proc->tf->esp;
++      
++      //copping the wrapper to the stack
++      nesp -= sigWrapperSize;
++      retAddress = (void*)(nesp);
++      memmove((void*)(nesp), sigretwrapper, sigWrapperSize);
++
++      nesp-=4;
++      uint tfFlag=0xABCDEF;
++      memmove((void*)nesp,&tfFlag,sizeof(uint));
++
++      //backuping the trapframe ont the stack
++      nesp -= sizeof(struct trapframe);
++      memmove((void*)(nesp),proc->tf,sizeof(struct trapframe));
++
++      //pushing the argument on the stack
++      nesp -= sizeof(int);
++      memmove((int*)(nesp),&signum,sizeof(int));
++
++      //pushing the new return adress on the stack
++      nesp -= sizeof(void*);
++      memmove((int*)(nesp),&retAddress,sizeof(int));
++
++      int has_lk = holding(&ptable.lock);
++      if (!has_lk) acquire(&ptable.lock);
++      
++      // change user eip so that user will run the signal handler next
++      proc->tf->eip = (uint)proc->handlers[signum];
++      proc->tf->ebp = nesp;
++      proc->tf->esp = nesp;
++      if (! has_lk) release(&ptable.lock);
++      }
++      else def_Hendler(signum);
++
++
++
++}
++
++// set alarms
++int
++alarm(int tic)
++{
++  int temp_alarm = 0;
++  int has_lk = holding(&ptable.lock);
++  if (!has_lk) acquire(&ptable.lock);
++  if(tic)
++    temp_alarm = tic;
++  else if(proc->pending & 1 << SIGALRM)
++    proc->pending ^=  1<< SIGALRM;//cancel an already pending SIGALARM signal
++  proc->alarmFlag=temp_alarm;
++  if (! has_lk) release(&ptable.lock);
++  return (proc->alarmFlag);
++}
++
++// handls alarms
++void
++updateAlarms()
++{
++  struct proc *p;
++  int has_lk = holding(&ptable.lock);
++  if (!has_lk) acquire(&ptable.lock);
++
++  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
++    if (p->alarmFlag > 0){
++      p->alarmFlag= p->alarmFlag-1;
++      if(p->alarmFlag==0)
++        sigsend(p->pid,SIGALRM);
++    }
++  }
++
++  if (! has_lk) release(&ptable.lock);
++  return;
++}
+\ No newline at end of file
+diff --git a/proc.h b/proc.h
+index 7352805..5a525f5 100644
+--- a/proc.h
++++ b/proc.h
+@@ -63,10 +63,14 @@ struct proc {
+   struct file *ofile[NOFILE];  // Open files
+   struct inode *cwd;           // Current directory
+   char name[16];               // Process name (debugging)
++  int pending;                 // currently unhandled (pending) signals
++  void* handlers[NUMSIG];   // pointers to signal handlers.
++  uint isHandlingsignal;                 // currntly handling a signal
++  uint alarmFlag;                  // time to be alarmed (0 if no alarms needed)
+ };
+ 
+ // Process memory is laid out contiguously, low addresses first:
+ //   text
+ //   original data and bss
+ //   fixed-size stack
+-//   expandable heap
++//   expandable heap
+\ No newline at end of file
+diff --git a/sanity.c b/sanity.c
+new file mode 100644
+index 0000000..b398be2
+--- /dev/null
++++ b/sanity.c
+@@ -0,0 +1,82 @@
++#include "uthread.h"
++#include "user.h"
++
++#define N 100 // buffer size;
++
++int mutex;
++struct counting_semaphore* empty;
++struct counting_semaphore* full;
++int in=0;
++int out=0;
++int arr[100];
++
++void
++producer(void* arg)
++{
++  for(int i = 1; i<1004; i++){
++      down(empty);
++      bsem_down(mutex);
++      arr[in]=i;
++      in=(in+1)%N;
++      bsem_up(mutex);
++      up(full);
++  }
++}
++
++void
++consumer(void* arg) {
++  int item;
++  while(1){
++    down(full);
++    bsem_down(mutex);
++    item = arr[out];
++    arr[out]=-1;
++    out=(out+1)%N;
++    if(item > 1000){
++      bsem_up(mutex);
++      up(empty);
++      break;
++    }
++    bsem_up(mutex);
++    up(empty);
++    //printf(1,"Thread %d going to sleep for %d ticks.\n",uthread_self(),item);
++    uthread_sleep(item);
++    printf(1,"Thread %d slept for %d ticks.\n",uthread_self(),item);
++  }
++}
++
++
++int
++main(int argc, char *argv[]){
++
++  int consumers[3];
++
++
++  uthread_init();
++  mutex = bsem_alloc();
++  empty = csem_alloc(N);
++  full = csem_alloc(0);
++
++
++  for(int i = 0; i<3; i++){
++    consumers[i] = uthread_create(consumer,0);
++  }
++
++  int prod = uthread_create(producer,0);
++  uthread_join(prod);
++
++  for(int i = 0; i<3; i++){
++    uthread_join(consumers[i]);
++  }
++  
++
++  bsem_free(mutex);
++  
++  csem_free(empty);
++  
++  csem_free(full);
++  
++
++  printf(1,"end of Sanity\n");
++  uthread_exit();
++}
+\ No newline at end of file
+diff --git a/syscall.c b/syscall.c
+index 9ae7536..af2ce55 100644
+--- a/syscall.c
++++ b/syscall.c
+@@ -98,6 +98,10 @@ extern int sys_unlink(void);
+ extern int sys_wait(void);
+ extern int sys_write(void);
+ extern int sys_uptime(void);
++extern int sys_signal(void);
++extern int sys_sigsend(void);
++extern int sys_sigreturn(void);
++extern int sys_alarm(void);
+ 
+ static int (*syscalls[])(void) = {
+ [SYS_fork]    sys_fork,
+@@ -121,6 +125,10 @@ static int (*syscalls[])(void) = {
+ [SYS_link]    sys_link,
+ [SYS_mkdir]   sys_mkdir,
+ [SYS_close]   sys_close,
++[SYS_signal]  sys_signal,
++[SYS_sigsend] sys_sigsend,
++[SYS_sigreturn] sys_sigreturn,
++[SYS_alarm]   sys_alarm,
+ };
+ 
+ void
+@@ -136,4 +144,4 @@ syscall(void)
+             proc->pid, proc->name, num);
+     proc->tf->eax = -1;
+   }
+-}
++}
+\ No newline at end of file
+diff --git a/syscall.h b/syscall.h
+index bc5f356..00c9b11 100644
+--- a/syscall.h
++++ b/syscall.h
+@@ -20,3 +20,7 @@
+ #define SYS_link   19
+ #define SYS_mkdir  20
+ #define SYS_close  21
++#define SYS_signal 22
++#define SYS_sigsend 23
++#define SYS_sigreturn 24
++#define SYS_alarm 25
+\ No newline at end of file
+diff --git a/sysproc.c b/sysproc.c
+index 6b585e0..c7dca29 100644
+--- a/sysproc.c
++++ b/sysproc.c
+@@ -89,3 +89,41 @@ sys_uptime(void)
+   release(&tickslock);
+   return xticks;
+ }
++
++
++int
++sys_signal(void)
++{
++  int signum;
++  sighandler_t handler;
++  if(argint(0, &signum) < 0 || argptr(1, (char**)&handler, sizeof(sighandler_t)) || signum < 0 || signum >= NUMSIG)
++    return -1;
++
++  return (int)signal(signum, handler);
++}
++
++
++int
++sys_sigsend(void)
++{
++  int pid, signum;
++  if(argint(0, &pid) < 0 || argint(1, &signum) < 0 || signum < 0 || signum >= NUMSIG)
++    return -1;
++
++  return sigsend(pid, signum);
++}
++
++int
++sys_sigreturn(void)
++{
++  return sigreturn();
++}
++
++int
++sys_alarm(void)
++{
++  int time;
++  if(argint(0, &time) < 0)
++    return -1;
++  return alarm(time);
++}
+\ No newline at end of file
+diff --git a/trap.c b/trap.c
+index e6b3784..8f10c01 100644
+--- a/trap.c
++++ b/trap.c
+@@ -51,6 +51,7 @@ trap(struct trapframe *tf)
+     if(cpunum() == 0){
+       acquire(&tickslock);
+       ticks++;
++      updateAlarms();
+       wakeup(&ticks);
+       release(&tickslock);
+     }
+@@ -108,4 +109,4 @@ trap(struct trapframe *tf)
+   // Check if the process has been killed since we yielded
+   if(proc && proc->killed && (tf->cs&3) == DPL_USER)
+     exit();
+-}
++}
+\ No newline at end of file
+diff --git a/trapasm.S b/trapasm.S
+index 787727f..df0de10 100644
+--- a/trapasm.S
++++ b/trapasm.S
+@@ -9,7 +9,7 @@ alltraps:
+   pushl %fs
+   pushl %gs
+   pushal
+-  
++
+   # Set up data and per-cpu segments.
+   movw $(SEG_KDATA<<3), %ax
+   movw %ax, %ds
+@@ -26,10 +26,13 @@ alltraps:
+   # Return falls through to trapret...
+ .globl trapret
+ trapret:
++  pushl %esp
++  call checkPEndingSignals
++  addl $4, %esp
+   popal
+   popl %gs
+   popl %fs
+   popl %es
+   popl %ds
+   addl $0x8, %esp  # trapno and errcode
+-  iret
++  iret
+\ No newline at end of file
+diff --git a/types.h b/types.h
+index e4adf64..b2a646c 100644
+--- a/types.h
++++ b/types.h
+@@ -2,3 +2,4 @@ typedef unsigned int   uint;
+ typedef unsigned short ushort;
+ typedef unsigned char  uchar;
+ typedef uint pde_t;
++typedef void (*sighandler_t)(int);
+\ No newline at end of file
+diff --git a/user.h b/user.h
+index f45b8d5..0ab64c0 100644
+--- a/user.h
++++ b/user.h
+@@ -1,5 +1,6 @@
+ struct stat;
+ struct rtcdate;
++struct tcb;
+ 
+ // system calls
+ int fork(void);
+@@ -23,6 +24,10 @@ int getpid(void);
+ char* sbrk(int);
+ int sleep(int);
+ int uptime(void);
++sighandler_t signal(int, sighandler_t);
++int sigsend(int, int);
++int sigreturn(void);
++int alarm(int);
+ 
+ // ulib.c
+ int stat(char*, struct stat*);
+@@ -36,4 +41,4 @@ uint strlen(char*);
+ void* memset(void*, int, uint);
+ void* malloc(uint);
+ void free(void*);
+-int atoi(const char*);
++int atoi(const char*);
+\ No newline at end of file
+diff --git a/usys.S b/usys.S
+index 8bfd8a1..e610e60 100644
+--- a/usys.S
++++ b/usys.S
+@@ -29,3 +29,7 @@ SYSCALL(getpid)
+ SYSCALL(sbrk)
+ SYSCALL(sleep)
+ SYSCALL(uptime)
++SYSCALL(signal)
++SYSCALL(sigsend)
++SYSCALL(sigreturn)
++SYSCALL(alarm)
+\ No newline at end of file
+diff --git a/uthread.c b/uthread.c
+new file mode 100644
+index 0000000..2e86b6a
+--- /dev/null
++++ b/uthread.c
+@@ -0,0 +1,342 @@
++#include "uthread.h"
++#include "user.h"
++
++uint nexttid = 1;
++int numOfThreads = 0;
++struct uthread* current;
++struct uthread u_table[MAX_UTHREADS];
++int currentInd;
++
++struct bsem* bsemtable[MAX_BSEM];
++
++
++
++int
++uthread_init()
++{
++ for(int i=0;i<MAX_UTHREADS;i++){
++ 	u_table[i].state=T_UNUSED;
++ }
++  struct uthread* ut = &u_table[0];
++  ut->tid = nexttid++;
++  ut->pid = getpid();
++  ut->state = T_RUNNING;
++  ut->t_stack = 0; //the main thread is using the regular user's stack, no need to free at uthread_exit
++  numOfThreads++;
++  current = ut;
++  currentInd=0;
++  ut->t_ind=0;
++  //initialize bsemTable
++  for(int j=0;j<MAX_BSEM;j++){
++    bsemtable[j]=0;
++  }
++  signal(SIGALRM, (sighandler_t) uthread_schedule);
++  sigsend(ut->pid, SIGALRM);//in order to ensure that the trapframe of the main thread is backed up on the user's stack as a side effect of the signal handling.
++  return ut->tid;
++}
++
++int
++uthread_create(void (*start_func)(void*), void* arg)
++{
++  alarm(0);//disabling SIGALARM interupts to make uthread_create an atomic method
++  struct uthread *ut;
++  uint sp;
++  int nextInd=0;
++  printf(2,"creating threads num%d\n",nexttid);
++
++  for(ut = u_table; ut < &u_table[MAX_UTHREADS]; ut++){
++    if(ut->state == T_UNUSED){
++      goto found;
++    }
++    nextInd++;
++  }
++  
++  return -1;
++
++  found:
++    numOfThreads++;
++    ut->tid = nexttid++;
++    ut->pid = getpid();
++    ut->tf = current->tf;
++    ut->t_ind=nextInd;
++    ut->numOfJoining=0;
++
++    // Allocate thread stack if no yet allocated.
++    if(!ut->t_stack){
++      if((ut->t_stack = (uint)malloc(STACKSIZE)) == 0){//saving a pointer to the thread's stack
++        ut->state = T_UNUSED;
++        sigsend(current->pid, SIGALRM);
++        return -1;
++      }
++    }
++
++
++    sp = ut->t_stack + STACKSIZE;
++    // push arg
++    sp -= 4;
++    *(void**)sp = arg;
++    // push return address to thread_exit
++    sp -= 4;
++    *(void**)sp = uthread_exit;
++    // initialize thread stack pointers
++    ut->tf.esp = sp;
++    // set threads eip to start_func
++    ut->tf.eip = (uint)start_func;
++    ut->state = T_RUNNABLE;
++    alarm(UTHREAD_QUANTA);//allowing SIGALARM to interupt again
++    return ut->tid;
++}
++uint findTrapframe(uint sp){
++  uint ans=sp;
++  uint runner=*(int*)ans;
++  while(runner!=0xABCDEF){
++    ans+=4;
++    runner=*(int*)ans;
++  }
++  ans-=sizeof(struct trapframe);
++  return ans;
++}
++
++void
++uthread_schedule()
++{
++  alarm(0);//disabling alarms to prevent synchronization problems
++  struct uthread *ut = current;
++  uint sp;
++
++  //find the trapframe on the stack
++  asm("movl %%ebp, %0;" :"=r"(sp) : :);
++  uint tfAdd=findTrapframe(sp);
++  
++  // back up the tf already on the stack to the current running thread's tf only if the current thread is not dead yet
++  memmove((void*)&ut->tf, (void*)tfAdd, sizeof(struct trapframe));
++  if(ut->state == T_RUNNING){
++    ut->state = T_RUNNABLE;
++  }
++
++  ut++;
++  if(ut >= &u_table[MAX_UTHREADS])
++    ut = u_table;
++  while(ut->state != T_RUNNABLE){
++    if(ut->state == T_SLEEPING && ut->wakeup > 0 && ut->wakeup <= uptime()){
++      ut->wakeup = 0;
++      ut->state = T_RUNNABLE;
++      break;
++    } else if(ut->state == T_UNUSED && ut->t_stack && ut->tid != current->tid && ut->tid != 1){
++      free((void*)ut->t_stack);
++      ut->t_stack = 0;
++    }
++    ut++;
++    if(ut >= &u_table[MAX_UTHREADS])
++      ut = u_table;
++  }
++  //make the context switch by puting the net trapframe on the stack
++  memmove((void*)tfAdd, (void*)&ut->tf, sizeof(struct trapframe));
++  current = ut;
++  currentInd=ut->t_ind;
++  ut->state = T_RUNNING;
++  alarm(UTHREAD_QUANTA);
++  return;
++}
++
++void
++uthread_exit()
++{
++  alarm(0);//disabling alarms to prevent synchronization problems
++  numOfThreads--;
++  //freeing all stacks
++  if(numOfThreads <= 0){
++    for(struct uthread* ut = u_table; ut < &u_table[MAX_UTHREADS]; ut++){
++      if(ut->t_stack){
++        free((void*)ut->t_stack);
++        ut->t_stack = 0;
++      }
++    }
++    exit();
++  }
++  //this loops waking up sleeping threads
++  if(current->numOfJoining){
++  		for(int j=0;j<current->numOfJoining;j++){
++  			int indToWakup=current->joiningList[j];
++  			u_table[indToWakup].state=T_RUNNABLE;
++  		}	
++  }
++
++  current->state = T_UNUSED;
++  sigsend(getpid(), SIGALRM);//instead of allowing alarms we send the signal and go to schedule where alarms will be allowed again
++  return;
++}
++
++int
++uthread_self()
++{
++  return current->tid;
++}
++
++int
++uthread_join(int tid)
++{
++  alarm(0);
++  for(struct uthread* ut = u_table; ut < &u_table[MAX_UTHREADS]; ut++){
++    if(ut->tid == tid && ut->state != T_UNUSED){
++      ut->joiningList[ut->numOfJoining]=current->t_ind;  // put current index on the joining list of ut
++      ut->numOfJoining++;
++      current->state = T_SLEEPING;
++      sigsend(current->pid, SIGALRM);
++      return 0;
++    }
++  }
++  alarm(UTHREAD_QUANTA); //allowing alarms again
++  return -1;
++}
++
++int uthread_sleep(int ticks)
++{
++  alarm(0);
++  uint current_ticks = uptime();
++  if(ticks < 0){
++    sigsend(current->pid, SIGALRM);//instead of allowing alarms we send the signal and go to schedule where alarms will be allowed again
++    return -1;
++  }
++  else if(ticks == 0){
++    current->wakeup = 0;
++  }
++  else{
++    current->wakeup = ticks+current_ticks;
++  }
++  current->state = T_SLEEPING;
++  sigsend(current->pid, SIGALRM);
++  return 0;
++}
++int findNextDecriptor(){
++  int ans=-1;;
++  for(int i=1;i<MAX_BSEM+1;i++){
++    if(bsemtable[i]==0){
++      ans=i;
++      break;
++    }
++  }
++  return ans;
++}
++
++
++
++
++
++
++int
++bsem_alloc()
++{
++  int desc=findNextDecriptor();
++  bsemtable[desc]=malloc(sizeof(struct bsem));
++  if(bsemtable[desc]<0)
++    return -1;
++  bsemtable[desc]->s=1;
++  bsemtable[desc]->insert=0;
++  bsemtable[desc]->toOut=0;
++  bsemtable[desc]->numOfWatingThreads=0;
++  bsemtable[desc]->size=MAX_UTHREADS;
++  bsemtable[desc]->list=malloc(sizeof(void*)*MAX_UTHREADS);
++  if(bsemtable[desc]->list==0)
++    return 0;
++  return desc;
++
++}
++
++void
++bsem_free(int sem)
++{
++  if(bsemtable[sem]){
++    if(bsemtable[sem]->list){
++      free(bsemtable[sem]->list);
++      bsemtable[sem]->list=0;
++    }
++    free(bsemtable[sem]);
++    bsemtable[sem]=0;
++
++  }
++}
++
++void
++bsem_down(int sem)
++{
++  alarm(0);
++  if(bsemtable[sem]->s){
++    bsemtable[sem]->s = 0;
++    alarm(UTHREAD_QUANTA);
++  }
++  else{
++    //bq_enqueue(bsemtable[sem]->waiting,current);
++    int ind=bsemtable[sem]->insert;
++    bsemtable[sem]->list[ind]=current;
++    ind=(ind+1)%MAX_UTHREADS;
++    bsemtable[sem]->insert=ind;
++    bsemtable[sem]->numOfWatingThreads++;
++    uthread_sleep(0);
++  }
++}
++
++void bsem_up(int sem)
++{
++  alarm(0);
++  if(bsemtable[sem]->numOfWatingThreads==0 && bsemtable[sem]->s==1)
++    return;
++  else if(bsemtable[sem]->numOfWatingThreads==0 && bsemtable[sem]->s==0){
++    bsemtable[sem]->s=1;
++    alarm(UTHREAD_QUANTA);
++
++  }
++  else{
++    int outInd=bsemtable[sem]->toOut;
++    struct uthread* ut=(struct uthread*)bsemtable[sem]->list[outInd];
++    bsemtable[sem]->list[outInd]=0;
++    outInd=(outInd+1)%MAX_UTHREADS;
++    bsemtable[sem]->toOut=outInd;
++    bsemtable[sem]->numOfWatingThreads--;
++    ut->state=T_RUNNABLE;
++    alarm(UTHREAD_QUANTA);
++  }
++}
++
++struct counting_semaphore*
++csem_alloc(int init_val)
++{
++  struct counting_semaphore *sem;
++  if((sem = malloc(sizeof(struct counting_semaphore))) == 0)
++    return 0;
++
++  sem->s1 = bsem_alloc();
++  sem->s2 = bsem_alloc();
++  if(init_val < 1){
++    bsem_down(sem->s2);
++  }
++  sem->val = init_val;
++  return sem;
++}
++
++void csem_free(struct counting_semaphore* sem)
++{
++  bsem_free(sem->s1);
++  bsem_free(sem->s2);
++  free(sem);
++}
++
++void
++down(struct counting_semaphore* sem){
++  bsem_down(sem->s2);
++  bsem_down(sem->s1);
++  sem->val--;
++  if(sem->val > 0)
++    bsem_up(sem->s2);
++  bsem_up(sem->s1);
++}
++
++void
++up(struct counting_semaphore* sem)
++{
++  bsem_down(sem->s1);
++  sem->val++;
++  if(sem->val ==1)
++    bsem_up(sem->s2);
++  bsem_up(sem->s1);
++}
+\ No newline at end of file
+diff --git a/uthread.h b/uthread.h
+new file mode 100644
+index 0000000..a339972
+--- /dev/null
++++ b/uthread.h
+@@ -0,0 +1,63 @@
++#include "types.h"
++#include "x86.h"
++#include "param.h"
++
++
++enum tstate { T_UNUSED, T_SLEEPING, T_RUNNABLE, T_RUNNING};
++
++struct uthread {
++  uint tid;   //thread id
++  uint t_stack; //pointer to the thread's stack
++  enum tstate state; //thread state (UNUSED, EMBRYO, SLEEPING, RUNNABLE, RUNNING, ZOMBIE)
++  struct trapframe tf; //the trapframe backed up on the user stack
++  uint pid; //the pid of the process running this thread
++  uint numOfJoining;  //number of threads who waits on this thread
++  uint joiningList[MAX_UTHREADS];        //the threads who waits on this thread by indexes
++  int wakeup; //the time for the thread to wake-up if sleeping
++  int t_ind;
++};
++
++struct bound_queue{
++  int in;
++  int out;
++  int contains;
++  int size;
++  void** queue;
++};
++
++
++struct bsem{
++  uint s;
++  int insert;
++  int toOut;
++  int size;
++  int numOfWatingThreads;
++  void** list;
++};
++
++struct counting_semaphore{
++  int val;
++  int s1;
++  int s2;
++};
++
++//uthread.c
++int uthread_init(void);
++int uthread_create(void (*) (void*), void*);
++void uthread_schedule(void);
++void uthread_exit(void);
++int uthread_self(void);
++int uthread_join(int);
++int uthread_sleep(int);
++
++
++
++
++int bsem_alloc(void);
++void bsem_free(int);
++void bsem_down(int);
++void bsem_up(int);
++struct counting_semaphore* csem_alloc(int init_val);
++void csem_free(struct counting_semaphore*);
++void down(struct counting_semaphore*);
++void up(struct counting_semaphore*);
+\ No newline at end of file
