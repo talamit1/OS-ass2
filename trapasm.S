@@ -9,7 +9,7 @@ alltraps:
   pushl %fs
   pushl %gs
   pushal
-  
+
   # Set up data and per-cpu segments.
   movw $(SEG_KDATA<<3), %ax
   movw %ax, %ds
@@ -26,6 +26,9 @@ alltraps:
   # Return falls through to trapret...
 .globl trapret
 trapret:
+  pushl %esp
+  call checkPEndingSignals
+  addl $4, %esp
   popal
   popl %gs
   popl %fs

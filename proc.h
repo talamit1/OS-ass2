@@ -63,6 +63,10 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+  int pending;                 // currently unhandled (pending) signals
+  void* handlers[NUMSIG];   // pointers to signal handlers.
+  uint isHandlingsignal;                 // currntly handling a signal
+  uint alarmFlag;                  // time to be alarmed (0 if no alarms needed)
 };
 
 // Process memory is laid out contiguously, low addresses first:

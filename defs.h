@@ -116,6 +116,12 @@ void            userinit(void);
 int             wait(void);
 void            wakeup(void*);
 void            yield(void);
+sighandler_t    signal(int, sighandler_t);
+int             sigsend(int, int);
+int             sigreturn(void);
+int             alarm(int);
+void            updateAlarms(void);
+
 
 // swtch.S
 void            swtch(struct context**, struct context*);

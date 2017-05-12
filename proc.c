@@ -7,6 +7,8 @@
 #include "proc.h"
 #include "spinlock.h"
 
+
+
 struct {
   struct spinlock lock;
   struct proc proc[NPROC];
@@ -19,6 +21,9 @@ extern void forkret(void);
 extern void trapret(void);
 
 static void wakeup1(void *chan);
+
+#define SIG_DFL 0;
+//2^0 up to 2^31 used to set pending signals
 
 void
 pinit(void)
@@ -85,7 +90,7 @@ userinit(void)
   extern char _binary_initcode_start[], _binary_initcode_size[];
 
   p = allocproc();
-  
+
   initproc = p;
   if((p->pgdir = setupkvm()) == 0)
     panic("userinit: out of memory?");
@@ -102,6 +107,11 @@ userinit(void)
 
   safestrcpy(p->name, "initcode", sizeof(p->name));
   p->cwd = namei("/");
+
+  p->pending = 0;
+  // set default sig handlers
+  for(int sig = 0; sig < NUMSIG; sig++)
+    p->handlers[sig] = SIG_DFL;
 
   // this assignment to p->state lets other cores
   // run this process. the acquire forces the above
@@ -170,6 +180,10 @@ fork(void)
   safestrcpy(np->name, proc->name, sizeof(proc->name));
 
   pid = np->pid;
+
+  // copy parnt's sig handlers
+  for(int sig = 0; sig < NUMSIG; sig++)
+    np->handlers[sig] = proc->handlers[sig];
 
   acquire(&ptable.lock);
 
@@ -252,6 +266,11 @@ wait(void)
         p->name[0] = 0;
         p->killed = 0;
         p->state = UNUSED;
+        p->pending = 0;
+        for(int sig = 0; sig < NUMSIG; sig++)
+          p->handlers[sig] = SIG_DFL;
+        p->isHandlingsignal = 0;
+        p->alarmFlag = 0;
         release(&ptable.lock);
         return pid;
       }
@@ -482,4 +501,219 @@ procdump(void)
     }
     cprintf("\n");
   }
+}
+
+
+void printTrapframe(struct trapframe* tf){
+  cprintf("-----------printing trapfram from kernel------\n");
+  cprintf("tf->edi: %d\n",tf->edi);
+  cprintf("tf->esi: %d\n",tf->esi);
+  cprintf("tf->ebp: %d\n",tf->ebp);
+  cprintf("tf->oesp: %d\n",tf->oesp);
+  cprintf("tf->ebx: %d\n",tf->ebx);
+  cprintf("tf->edx: %d\n",tf->edx);
+  cprintf("tf->ecx: %d\n",tf->ecx);
+  cprintf("tf->eax: %d\n",tf->eax);
+  
+  cprintf("tf->gs: %d\n",tf->gs);
+  cprintf("tf->padding1: %d\n",tf->padding1);
+  cprintf("tf->fs: %d\n",tf->fs);
+  cprintf("tf->padding2: %d\n",tf->padding2);
+  cprintf("tf->es: %d\n",tf->es);
+  cprintf("tf->padding3: %d\n",tf->padding3);
+  cprintf("tf->ds: %d\n",tf->ds);
+  cprintf("tf->padding4: %d\n",tf->padding4);
+  cprintf("tf->trapno: %d\n",tf->trapno);
+
+
+  cprintf("tf->err: %d\n",tf->err); 
+  cprintf("tf->eip: %d\n",tf->eip);
+  cprintf("tf->cs: %d\n",tf->cs);
+  cprintf("tf->padding5: %d\n",tf->padding5); 
+  cprintf("tf->eflags: %d\n",tf->eflags);
+
+  cprintf("tf->esp: %d\n",tf->esp);
+  cprintf("tf->ss: %d\n",tf->ss);
+  cprintf("tf->padding6: %d\n",tf->padding6);
+
+}
+
+
+// default signal handler RETURN??
+void
+def_Hendler(int signum){
+  cprintf("A signal %d was accepted by %d\n",signum,proc->pid);
+  return;
+}
+
+// sets the signal handler "handler" for the signal "signum"
+sighandler_t
+signal(int signum, sighandler_t handler)
+{
+  if(signum < 0 || signum >= NUMSIG)
+    return (sighandler_t)(-1);
+  sighandler_t old_handler = proc->handlers[signum];
+  int has_lk = holding(&ptable.lock);
+  if (!has_lk) acquire(&ptable.lock);
+  proc->handlers[signum] = handler;
+  if (! has_lk) release(&ptable.lock);
+  return old_handler;
+}
+
+// sends the signal "signum" to procees "pid"
+int
+sigsend(int pid, int signum)
+{
+  struct proc *p;
+
+  if(signum < 0 || signum >= NUMSIG)
+    return -1;
+
+  int has_lk = holding(&ptable.lock);
+  if (!has_lk) acquire(&ptable.lock);
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+    if(p->pid == pid){
+      p->pending |= 1<<signum;
+      if (! has_lk) release(&ptable.lock);
+      return 0;
+    }
+  }
+  if (! has_lk) release(&ptable.lock);
+  return -1;
+}
+
+
+
+// code copied to users stack in order to call sig_return upon signal handlers completion
+void
+sigretwrapper()
+{
+  // simulate calling sigreturn() by pushing 0 which is argc,
+  // putting 24 which is SYS_sigreturn in eax and delaring int 64 (interupt handler)
+  asm("pushl $0; movl $24, %eax; int $64;");
+
+}
+
+
+uint findTrapframe(uint sp){
+  uint ans=sp;
+  uint runner=*(int*)ans;
+  while(runner!=0xABCDEF){
+    ans+=4;
+    runner=*(int*)ans;
+  }
+  ans-=sizeof(struct trapframe);
+  return ans;
+}
+
+// (system call) retuen from a signal handler
+int
+sigreturn()
+{
+  int has_lk = holding(&ptable.lock);
+  if (!has_lk) acquire(&ptable.lock);
+  if(memmove(proc->tf,(void*)(proc->tf->ebp + 8),sizeof(struct trapframe)) < 0){ // backup trapframe on user stack
+    proc->isHandlingsignal = 0;
+    if (! has_lk) release(&ptable.lock);
+    return -1;
+  }
+  proc->isHandlingsignal = 0;
+  if (! has_lk) release(&ptable.lock);
+  return 0;
+}
+
+void
+checkPEndingSignals(struct trapframe* tf)
+{
+  if(proc == 0 || proc->pending == 0 || proc->isHandlingsignal || (tf->cs &  3) != DPL_USER)
+    return;
+  int signum;
+  for(signum=0; signum<NUMSIG; signum++){
+    if(proc->pending & 1 << signum){
+      goto handle;
+    }
+  }
+  return;
+  int has_lk;
+  handle:
+    has_lk= holding(&ptable.lock);
+    if (!has_lk) acquire(&ptable.lock);
+      proc->pending ^=  1 << signum; // remove signal signum for pending signals
+    if (! has_lk) release(&ptable.lock);
+
+    if(proc->handlers[signum]){
+      uint sigWrapperSize = (uint)sigreturn - (uint)sigretwrapper;
+      void* retAddress;
+      uint nesp = proc->tf->esp;
+      
+      //copping the wrapper to the stack
+      nesp -= sigWrapperSize;
+      retAddress = (void*)(nesp);
+      memmove((void*)(nesp), sigretwrapper, sigWrapperSize);
+
+      nesp-=4;
+      uint tfFlag=0xABCDEF;
+      memmove((void*)nesp,&tfFlag,sizeof(uint));
+
+      //backuping the trapframe ont the stack
+      nesp -= sizeof(struct trapframe);
+      memmove((void*)(nesp),proc->tf,sizeof(struct trapframe));
+
+      //pushing the argument on the stack
+      nesp -= sizeof(int);
+      memmove((int*)(nesp),&signum,sizeof(int));
+
+      //pushing the new return adress on the stack
+      nesp -= sizeof(void*);
+      memmove((int*)(nesp),&retAddress,sizeof(int));
+
+      int has_lk = holding(&ptable.lock);
+      if (!has_lk) acquire(&ptable.lock);
+      
+      // change user eip so that user will run the signal handler next
+      proc->tf->eip = (uint)proc->handlers[signum];
+      proc->tf->ebp = nesp;
+      proc->tf->esp = nesp;
+      if (! has_lk) release(&ptable.lock);
+      }
+      else def_Hendler(signum);
+
+
+
+}
+
+// set alarms
+int
+alarm(int tic)
+{
+  int temp_alarm = 0;
+  int has_lk = holding(&ptable.lock);
+  if (!has_lk) acquire(&ptable.lock);
+  if(tic)
+    temp_alarm = tic;
+  else if(proc->pending & 1 << SIGALRM)
+    proc->pending ^=  1<< SIGALRM;//cancel an already pending SIGALARM signal
+  proc->alarmFlag=temp_alarm;
+  if (! has_lk) release(&ptable.lock);
+  return (proc->alarmFlag);
+}
+
+// handls alarms
+void
+updateAlarms()
+{
+  struct proc *p;
+  int has_lk = holding(&ptable.lock);
+  if (!has_lk) acquire(&ptable.lock);
+
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+    if (p->alarmFlag > 0){
+      p->alarmFlag= p->alarmFlag-1;
+      if(p->alarmFlag==0)
+        sigsend(p->pid,SIGALRM);
+    }
+  }
+
+  if (! has_lk) release(&ptable.lock);
+  return;
 }
