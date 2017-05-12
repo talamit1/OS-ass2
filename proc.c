@@ -22,8 +22,19 @@ extern void trapret(void);
 
 static void wakeup1(void *chan);
 
+<<<<<<< HEAD
 #define SIG_DFL 0;
 //2^0 up to 2^31 used to set pending signals
+=======
+
+void initSigHandlers(struct proc * p) {
+    int i;
+    for (i = 0; i < NUMSIG; i++) {
+            p->handlers[i] = 0;     
+    }
+}
+
+>>>>>>> d445f1485d79782627e7ffb832b538acdeaca7b6
 
 void
 pinit(void)
@@ -67,11 +78,17 @@ found:
   // Leave room for trap frame.
   sp -= sizeof *p->tf;
   p->tf = (struct trapframe*)sp;
+  p->pending=0;
+  p->alarmFlag =-1;
 
   // Set up new context to start executing at forkret,
   // which returns to trapret.
   sp -= 4;
   *(uint*)sp = (uint)trapret;
+  
+  initSigHandlers(p);
+  p->pending=0;
+  p->isHandelingSignal=0;
 
   sp -= sizeof *p->context;
   p->context = (struct context*)sp;
@@ -238,6 +255,225 @@ exit(void)
   sched();
   panic("zombie exit");
 }
+/* ---------------task 1B ------------- */
+//register a new signal handler to the process handlers
+
+//function to print trapframe;
+void printTrapframe(struct trapframe* tf){
+  cprintf("-----------printing trapfram from kernel------\n");
+  cprintf("tf->edi: %d\n",tf->edi);
+  cprintf("tf->esi: %d\n",tf->esi);
+  cprintf("tf->ebp: %d\n",tf->ebp);
+  cprintf("tf->oesp: %d\n",tf->oesp);
+  cprintf("tf->ebx: %d\n",tf->ebx);
+  cprintf("tf->edx: %d\n",tf->edx);
+  cprintf("tf->ecx: %d\n",tf->ecx);
+  cprintf("tf->eax: %d\n",tf->eax);
+  
+  cprintf("tf->gs: %d\n",tf->gs);
+  cprintf("tf->padding1: %d\n",tf->padding1);
+  cprintf("tf->fs: %d\n",tf->fs);
+  cprintf("tf->padding2: %d\n",tf->padding2);
+  cprintf("tf->es: %d\n",tf->es);
+  cprintf("tf->padding3: %d\n",tf->padding3);
+  cprintf("tf->ds: %d\n",tf->ds);
+  cprintf("tf->padding4: %d\n",tf->padding4);
+  cprintf("tf->trapno: %d\n",tf->trapno);
+
+
+  cprintf("tf->err: %d\n",tf->err); 
+  cprintf("tf->eip: %d\n",tf->eip);
+  cprintf("tf->cs: %d\n",tf->cs);
+  cprintf("tf->padding5: %d\n",tf->padding5); 
+  cprintf("tf->eflags: %d\n",tf->eflags);
+
+  cprintf("tf->esp: %d\n",tf->esp);
+  cprintf("tf->ss: %d\n",tf->ss);
+  cprintf("tf->padding6: %d\n",tf->padding6);
+
+}
+
+sighandler_t signal(int signum,sighandler_t handler){
+  if(!proc || signum<0 || signum>=NUMSIG) 
+    return (sighandler_t)-1;
+  //acquire(&ptable.lock);
+  sighandler_t oldHandler=proc->handlers[signum];
+  proc->handlers[signum]=handler;
+  //release(&ptable.lock);
+  
+  return oldHandler;
+}
+/* ---------------task 1C ------------- */
+//this function responsible for the sgnal sending
+int sigsend(int pid,int signum){
+  struct proc *p;
+  acquire(&ptable.lock);
+  int found=0;
+  for(p=ptable.proc;p<&ptable.proc[NPROC]&& !found ;p++){
+    if(p->pid==pid){
+      found=1;
+      int num=1<<signum;
+      proc->pending|=num;
+     // cprintf("pending in sigsend is: %d \n",p->pending);
+      break;
+
+    }
+  }
+
+  release(&ptable.lock);
+  if(found==0)
+    return -1;
+
+  return 0;
+
+}
+
+void defHandler(int signum){
+
+  cprintf("A signal %d was accepted by process %d\n",signum,proc->pid);
+
+}
+
+int sigreturn(void){ 
+
+  cprintf("-----------proc tf when starting sigreturn:-----\n "); 
+  //printTrapframe(proc->tf); 
+
+
+  int has_lk = holding(&ptable.lock);
+  if (!has_lk) acquire(&ptable.lock);
+  memmove(proc->tf,(void*)(proc->tf->ebp + 8),sizeof(struct trapframe)); // backup trapframe on user stack
+  if (! has_lk) release(&ptable.lock);
+  return 0;
+  
+
+  
+  // cprintf("-----------proc tf at the end of sigreturn:-----\n ");
+  // printTrapframe(proc->tf);   
+  
+  
+ 
+ return 0;
+}
+
+void 
+sigretwrapper() 
+{  
+	__asm__ (
+          "movl $24, %eax\n" // sigreturn number
+          "int     $64");
+}
+
+
+
+/*------------- task 1D ---------------*/
+//this function checks pending signals and handle them if necessery
+void checkPendingSignals(){
+  if(proc && (proc->tf->cs&3) == DPL_USER   && (proc->pending != 0) ){
+    //cprintf("------------------------------------------------------\n");
+          
+          uint runner=proc->pending;
+          uint sigNum;
+          if(proc->pending==1)
+            sigNum=0;
+          else{
+          for(sigNum=-1;runner!=0;runner>>=1)
+            sigNum++;
+        }
+
+          proc->pending-=1<<sigNum;
+          
+          //cprintf("proc pending is: %d\n",proc->pending);
+
+          sighandler_t handler = proc->handlers[sigNum];         
+
+          if(handler==0){
+           
+            defHandler(sigNum);
+            return;}
+ 		            
+         uint nesp = proc->tf->esp-(&checkPendingSignals-&sigretwrapper);
+         // cprintf("-----------proc tf at checking signal it on the stack:-----\n ") ;
+         // printTrapframe(proc->tf);
+         int retAddress=nesp;
+         memmove((void*)nesp,sigretwrapper,&checkPendingSignals-&sigretwrapper);
+         nesp-=4;
+         uint tfFlag=0xABCDEF;
+         memmove((void*)nesp,&tfFlag,sizeof(uint));
+         
+         nesp-=sizeof(struct trapframe);
+         memmove((void*)nesp,proc->tf,sizeof(struct trapframe));
+
+        //cprintf("trapframe put at : %d\n",nesp);
+         //cprintf("--------the tf proc->tf int checkingSignals is:--------");
+         //printTrapframe(proc->tf);
+         //cprintf("--------------------gg------------------");
+         //cprintf("--------the tf pushed on the stack int checkingSignals is:--------");
+         //printTrapframe((struct trapframe*)&nesp);
+         //cprintf("--------------------llll------------------");
+
+         //pushing sigNumber(sighandler arguments)
+         nesp=nesp-sizeof(int);
+         memmove((void*)nesp,&sigNum,sizeof(int));
+         //pushing the sigreturn return adress
+         nesp=nesp-sizeof(int*);
+         memmove((void*)nesp,&retAddress,sizeof(int));
+         cprintf("retAdress put on place: %d\n",nesp);
+
+
+           int has_lk = holding(&ptable.lock);
+           if (!has_lk) acquire(&ptable.lock);
+          // change user eip so that user will run the signal handler next
+          proc->tf->eip = (uint)proc->handlers[sigNum];
+          proc->tf->ebp = nesp;
+          proc->tf->esp = nesp;
+          if (! has_lk) release(&ptable.lock);
+	   }
+  }
+
+void updateAlarams(){
+  struct proc *p;
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){        
+    if(p->alarmFlag >0){
+      p->alarmFlag--;
+      if(p->alarmFlag==0){
+        p->pending|=1<<14;
+      }
+    }
+
+  }
+
+}
+int alarm(int ti){
+ 
+if(ti <0)
+  return -1;
+
+int temp = ~1<<14;
+
+if(ti==0){
+  proc->pending &= temp;
+  return 0;}
+
+
+  proc->alarmFlag= ti;
+return 0;
+
+}
+
+
+
+
+
+ /* 
+  if(ti==0){
+    proc->pending ^=1<<14;
+  }
+
+  proc-> alarmFlag= ti;
+
+  return 0;
+}*/
 
 // Wait for a child process to exit and return its pid.
 // Return -1 if this process has no children.

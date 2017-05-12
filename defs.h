@@ -116,11 +116,19 @@ void            userinit(void);
 int             wait(void);
 void            wakeup(void*);
 void            yield(void);
+<<<<<<< HEAD
 sighandler_t    signal(int, sighandler_t);
 int             sigsend(int, int);
 int             sigreturn(void);
 int             alarm(int);
 void            updateAlarms(void);
+=======
+int             sigsend(int pid,int signum);
+sighandler_t    signal(int signum,sighandler_t handler);
+int             sigreturn(void);
+int 			alarm(int);
+void 			updateAlarams(void);
+>>>>>>> d445f1485d79782627e7ffb832b538acdeaca7b6
 
 
 // swtch.S
@@ -187,6 +195,7 @@ void            switchuvm(struct proc*);
 void            switchkvm(void);
 int             copyout(pde_t*, uint, void*, uint);
 void            clearpteu(pde_t *pgdir, char *uva);
+
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))

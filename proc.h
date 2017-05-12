@@ -1,3 +1,5 @@
+
+
 // Per-CPU state
 struct cpu {
   uchar apicid;                // Local APIC ID
@@ -46,8 +48,13 @@ struct context {
   uint eip;
 };
 
-enum procstate { UNUSED, EMBRYO, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
+
+
+
+enum procstate { UNUSED, EMBRYO, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
+#define NUMSIG 32
+#define MAX_UTHREADS 64 
 // Per-process state
 struct proc {
   uint sz;                     // Size of process memory (bytes)
@@ -63,10 +70,19 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+<<<<<<< HEAD
   int pending;                 // currently unhandled (pending) signals
   void* handlers[NUMSIG];   // pointers to signal handlers.
   uint isHandlingsignal;                 // currntly handling a signal
   uint alarmFlag;                  // time to be alarmed (0 if no alarms needed)
+=======
+  uint pending;                //an 32 bit array  represents pending signals
+  sighandler_t handlers[NUMSIG];        //array containts pointers to signal handlesrs functions
+  int  isHandelingSignal;      // 1 if there is signal hendling on process an 0 otherwise
+  int alarmFlag;
+
+
+>>>>>>> d445f1485d79782627e7ffb832b538acdeaca7b6
 };
 
 // Process memory is laid out contiguously, low addresses first:

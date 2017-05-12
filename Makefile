@@ -175,7 +175,13 @@ UPROGS=\
 	_usertests\
 	_wc\
 	_zombie\
+<<<<<<< HEAD
 	_sanity\
+=======
+	_t\
+	_t2\
+	_t3\
+>>>>>>> d445f1485d79782627e7ffb832b538acdeaca7b6
 	
 
 fs.img: mkfs README $(UPROGS)
@@ -244,7 +250,11 @@ qemu-nox-gdb: fs.img xv6.img .gdbinit
 # check in that version.
 
 EXTRA=\
+<<<<<<< HEAD
 	sanity.c   mkfs.c ulib.c user.h cat.c echo.c forktest.c grep.c kill.c\
+=======
+	t3.c  t.c t2.c mkfs.c ulib.c user.h cat.c echo.c forktest.c grep.c kill.c\
+>>>>>>> d445f1485d79782627e7ffb832b538acdeaca7b6
 	ln.c ls.c mkdir.c rm.c stressfs.c usertests.c wc.c zombie.c\
 	printf.c umalloc.c \
 	README dot-bochsrc *.pl toc.* runoff runoff1 runoff.list\

@@ -27,7 +27,11 @@ alltraps:
 .globl trapret
 trapret:
   pushl %esp
+<<<<<<< HEAD
   call checkPEndingSignals
+=======
+  call checkPendingSignals
+>>>>>>> d445f1485d79782627e7ffb832b538acdeaca7b6
   addl $4, %esp
   popal
   popl %gs
